@@ -44,6 +44,13 @@ llvm::cl::opt<unsigned>
                  llvm::cl::init(llvm::MaxAnalysisRecursionDepth),
                  llvm::cl::cat(PatternMinerOptions));
 
+llvm::cl::opt<std::string>
+    Mode("mode",
+         llvm::cl::desc("Output mode: 'patterns' (enumerate sub-patterns) or "
+                        "'dag' (emit one truncated shared DAG per instruction)"),
+         llvm::cl::value_desc("patterns|dag"), llvm::cl::init("patterns"),
+         llvm::cl::cat(PatternMinerOptions));
+
 } // namespace
 
 static llvm::ExitOnError ExitOnErr;
@@ -114,6 +121,42 @@ private:
   unsigned PatternOccurrenceCount = 0;
 };
 
+// Emit one truncated, sharing-preserving DAG per expandable instruction. Each
+// record is prefixed with a comment naming its root so goldens are
+// self-documenting; instructions without a PatternOp produce no record.
+static int runDagMode(llvm::Module &Module, const std::string &OutputFilename,
+                      unsigned Depth) {
+  std::error_code EC;
+  llvm::raw_fd_ostream Out(OutputFilename, EC, llvm::sys::fs::OF_Text);
+  if (EC) {
+    llvm::errs() << "Error: cannot open output file '" << OutputFilename
+                 << "': " << EC.message() << "\n";
+    return -1;
+  }
+
+  unsigned RecordCount = 0;
+  for (llvm::Function &SourceFunction : Module) {
+    for (llvm::Instruction &Inst : llvm::instructions(SourceFunction)) {
+      std::string RootText;
+      llvm::raw_string_ostream RootOS(RootText);
+      Inst.print(RootOS);
+      llvm::StringRef Trimmed = llvm::StringRef(RootOS.str()).trim();
+
+      std::string Record;
+      llvm::raw_string_ostream RecordOS(Record);
+      llvm::DAGSlicer::serializeTruncatedDAG(&Inst, Depth, RecordOS);
+      if (RecordOS.str().empty())
+        continue;
+
+      Out << "; root:" << Trimmed << '\n' << Record << '\n';
+      ++RecordCount;
+    }
+  }
+
+  llvm::errs() << "DAG records: " << RecordCount << "\n";
+  return 0;
+}
+
 int main(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   llvm::InitLLVM X(argc, argv);
@@ -140,12 +183,20 @@ int main(int argc, char **argv) {
     }
   }
 
+  if (Mode != "patterns" && Mode != "dag") {
+    llvm::errs() << "Error: --mode must be 'patterns' or 'dag'\n";
+    return -1;
+  }
+
   auto ModuleOwner = openInputFile(Context, InputFilename);
   if (!ModuleOwner) {
     llvm::errs() << "Could not read input file from '" << InputFilename
                  << "'\n";
     return -1;
   }
+
+  if (Mode == "dag")
+    return runDagMode(*ModuleOwner, OutputFilename, PatternDepth);
 
   PatternMiner Miner(*ModuleOwner);
   Miner.run();

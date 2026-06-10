@@ -545,6 +545,79 @@ std::optional<std::string> getCanonicalSortKey(const PatternTree &Tree) {
   return renderCanonicalPatternTree(Tree);
 }
 
+// A single node of a truncated, sharing-preserving DAG. Mirrors PatternOp's
+// view of an instruction (canonical name, normalized operand order), but
+// references its operands by node id so reused values are not unfolded.
+struct DAGNodeInfo {
+  bool IsBoundary;
+  std::string Name; // empty for boundary nodes
+  PatternValueType ResultType;
+  unsigned BitWidth;
+  bool IsCommutative;
+  SmallVector<unsigned, 3> Operands; // node ids
+};
+
+// Builds the maximal truncation of the value graph rooted at a given Value,
+// assigning one id per distinct Value (so sharing is preserved). A value is
+// expanded into a node when it has a PatternOp and depth remains; otherwise it
+// is a boundary leaf. A value reached by several paths is expanded to the
+// deepest budget any path allows; shallower paths re-truncate it downstream.
+class TruncatedDAGBuilder {
+public:
+  unsigned build(const Value *V, unsigned Remaining) {
+    auto VisitedIt = ExpandedRemaining.find(V);
+    bool Known = VisitedIt != ExpandedRemaining.end();
+    unsigned Id;
+    if (Known) {
+      Id = NodeIds[V];
+      // Already expanded at least this deep: the existing node dominates.
+      if (VisitedIt->second >= Remaining)
+        return Id;
+    } else {
+      Id = Nodes.size();
+      Nodes.emplace_back();
+      NodeIds[V] = Id;
+    }
+    ExpandedRemaining[V] = Remaining;
+
+    const auto *Inst = dyn_cast<Instruction>(V);
+    std::optional<PatternOp> Op =
+        (Remaining > 0 && Inst) ? getPatternOp(Inst) : std::nullopt;
+
+    DAGNodeInfo Info;
+    if (!Op) {
+      Info.IsBoundary = true;
+      // Operands of an expanded node always have a pattern value type (getPatternOp
+      // checks operand types), and the root is required to be expandable, so any
+      // value reached here is pattern-typed. Guard defensively regardless.
+      auto Ty = getPatternValueType(V->getType());
+      Info.ResultType = Ty.value_or(PatternValueType::DataInt);
+      Info.BitWidth = Ty ? getBitWidth(V->getType()) : 0;
+      Info.IsCommutative = false;
+    } else {
+      Info.IsBoundary = false;
+      Info.Name = Op->Name;
+      Info.ResultType = Op->ResultType;
+      Info.BitWidth = getBitWidth(Inst->getType());
+      Info.IsCommutative = Op->IsCommutative;
+      for (unsigned OperandIdx : Op->OperandIndices)
+        Info.Operands.push_back(
+            build(Inst->getOperand(OperandIdx), Remaining - 1));
+    }
+    // Assign after building children: child recursion may have grown Nodes and
+    // could reallocate, so we must not hold a reference across build().
+    Nodes[Id] = std::move(Info);
+    return Id;
+  }
+
+  ArrayRef<DAGNodeInfo> nodes() const { return Nodes; }
+
+private:
+  std::vector<DAGNodeInfo> Nodes;
+  DenseMap<const Value *, unsigned> NodeIds;
+  DenseMap<const Value *, unsigned> ExpandedRemaining;
+};
+
 } // namespace
 
 namespace llvm::DAGSlicer {
@@ -577,6 +650,104 @@ void recordPatterns(const Value *Root, unsigned AnalysisDepth,
   LLVM_DEBUG(
       enumeratePatterns(Root, MinDepth, RemainingDepth,
                         [&](StringRef Pattern) { dbgs() << Pattern << '\n'; }));
+}
+
+void serializeTruncatedDAG(const Value *Root, unsigned MaxDepth,
+                           raw_ostream &OS) {
+  // Mirror enumeratePatterns: the root must itself be an expandable node.
+  const auto *Inst = dyn_cast_or_null<Instruction>(Root);
+  if (!Inst || !getPatternOp(Inst))
+    return;
+
+  TruncatedDAGBuilder Builder;
+  // The root is the first value built, so it is always node id 0.
+  Builder.build(Root, MaxDepth);
+  ArrayRef<DAGNodeInfo> Nodes = Builder.nodes();
+
+  // Skip trivial DAGs with a single non-boundary node: that is just the root
+  // expanded one level over boundary operands (a depth-1 structure), which
+  // yields no pattern at or above the MinDepth=2 floor.
+  unsigned NonBoundaryNodes = 0;
+  for (const DAGNodeInfo &N : Nodes)
+    if (!N.IsBoundary)
+      ++NonBoundaryNodes;
+  if (NonBoundaryNodes < 2)
+    return;
+
+  // Renumber the operation nodes into a root-first SSA order: every node's
+  // %index must be strictly below its operands' %indices. The builder assigns
+  // ids in DFS first-encounter order, which is *not* such an order when a node
+  // is shared (a shared op can get a lower id than one of its parents), so we
+  // compute a reverse-postorder from the root instead. The root (id 0) finishes
+  // last, so it lands at SsaIndex 0.
+  SmallVector<unsigned, 16> Postorder; // operation node ids, child-before-parent
+  SmallVector<unsigned, 16> SsaIndex(Nodes.size(), ~0u);
+  {
+    SmallVector<std::pair<unsigned, unsigned>, 16> Stack; // (id, next operand)
+    SmallVector<bool, 16> Done(Nodes.size(), false);
+    Stack.emplace_back(0, 0);
+    while (!Stack.empty()) {
+      auto &[Id, OpNo] = Stack.back();
+      const DAGNodeInfo &N = Nodes[Id];
+      if (OpNo == N.Operands.size()) {
+        Postorder.push_back(Id);
+        Done[Id] = true;
+        Stack.pop_back();
+        continue;
+      }
+      unsigned Child = N.Operands[OpNo++];
+      // Only operation nodes get SSA ids; boundaries render inline as args.
+      // Sharing means a node may be reached repeatedly, so skip ones already
+      // emitted (Done) or currently being expanded (on the stack).
+      if (!Nodes[Child].IsBoundary && !Done[Child])
+        Stack.emplace_back(Child, 0);
+    }
+  }
+  // Reverse postorder -> contiguous SSA indices, root first.
+  for (unsigned I = 0; I < Postorder.size(); ++I)
+    SsaIndex[Postorder[Postorder.size() - 1 - I]] = I;
+
+  // Number boundary values as argK by first appearance, scanning statements
+  // root-first and operands left-to-right (so shared boundaries reuse one arg).
+  DenseMap<unsigned, unsigned> ArgNumbers;
+  for (unsigned I = 0; I < Postorder.size(); ++I) {
+    unsigned Id = Postorder[Postorder.size() - 1 - I];
+    const DAGNodeInfo &N = Nodes[Id];
+    if (I)
+      OS << "; ";
+    OS << '%' << I << " = " << N.Name << '(';
+    for (unsigned J = 0; J < N.Operands.size(); ++J) {
+      if (J)
+        OS << ", ";
+      unsigned Child = N.Operands[J];
+      if (Nodes[Child].IsBoundary) {
+        auto Inserted = ArgNumbers.try_emplace(Child, ArgNumbers.size());
+        OS << "arg" << Inserted.first->second;
+      } else {
+        OS << '%' << SsaIndex[Child];
+      }
+    }
+    OS << ')';
+  }
+  OS << '\n';
+}
+
+} // namespace llvm::DAGSlicer
+
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "dag-slicer-graph"
+
+namespace llvm::DAGSlicer {
+
+void recordDAG(const Value *Root, unsigned AnalysisDepth, unsigned MinDepth,
+               unsigned MaxDepth) {
+  assert(MinDepth <= MaxDepth);
+  assert(AnalysisDepth <= MaxDepth && "analysis depth exceeds max depth");
+  unsigned RemainingDepth = MaxDepth - AnalysisDepth;
+  if (RemainingDepth < MinDepth)
+    return;
+
+  LLVM_DEBUG(serializeTruncatedDAG(Root, RemainingDepth, dbgs()));
 }
 
 } // namespace llvm::DAGSlicer

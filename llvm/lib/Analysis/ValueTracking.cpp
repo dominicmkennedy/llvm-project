@@ -115,6 +115,18 @@ static cl::opt<bool> EnablePatternOffBaseline(
              "(PatternKBBitsAddedTopLevel statistic). Roughly doubles "
              "top-level known-bits cost; enable only for stats runs."));
 
+static cl::opt<bool> EnableKnownBitsDagLogging(
+    "enable-knownbits-dag-logging", cl::Hidden, cl::init(false),
+    cl::desc("Log one truncated DAGSlicer DAG per computeKnownBits visit "
+             "instead of enumerating sub-patterns. Requires "
+             "-debug-only=dag-slicer-graph output to be enabled."));
+
+static cl::opt<bool> EnableConstantRangeDagLogging(
+    "enable-constantrange-dag-logging", cl::Hidden, cl::init(false),
+    cl::desc("Log one truncated DAGSlicer DAG per computeConstantRange visit "
+             "instead of enumerating sub-patterns. Requires "
+             "-debug-only=dag-slicer-graph output to be enabled."));
+
 /// Maximum number of instructions to check between assume and context
 /// instruction.
 static constexpr unsigned MaxInstrsToCheckForFree = 16;
@@ -2858,6 +2870,8 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
 
   if (EnableKnownBitsPatternMining)
     DAGSlicer::recordPatterns(V, Depth, 2, MaxAnalysisRecursionDepth);
+  if (EnableKnownBitsDagLogging)
+    DAGSlicer::recordDAG(V, Depth, 2, MaxAnalysisRecursionDepth);
 
   const APInt *C;
   if (match(V, m_APInt(C))) {
@@ -10707,6 +10721,8 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
 
   if (EnableConstantRangePatternMining)
     DAGSlicer::recordPatterns(V, Depth, 2, MaxAnalysisRecursionDepth);
+  if (EnableConstantRangeDagLogging)
+    DAGSlicer::recordDAG(V, Depth, 2, MaxAnalysisRecursionDepth);
 
   if (Depth == MaxAnalysisRecursionDepth)
     return ConstantRange::getFull(V->getType()->getScalarSizeInBits());
