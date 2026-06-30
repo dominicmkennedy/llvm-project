@@ -19,6 +19,7 @@
 #include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;

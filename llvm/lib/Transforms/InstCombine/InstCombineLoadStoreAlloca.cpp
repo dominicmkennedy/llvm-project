@@ -22,6 +22,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 using namespace llvm;
 using namespace PatternMatch;
 

@@ -39,6 +39,7 @@
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
+#include "llvm/Support/KBOptLog.h"
 
 #include <cmath>
 

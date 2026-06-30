@@ -59,6 +59,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/GuardUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Support/KBOptLog.h"
 #include <functional>
 
 using namespace llvm;

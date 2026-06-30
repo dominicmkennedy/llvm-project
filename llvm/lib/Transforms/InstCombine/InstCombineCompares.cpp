@@ -31,6 +31,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 #include <bitset>
 
 using namespace llvm;

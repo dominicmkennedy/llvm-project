@@ -38,6 +38,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 #include <iterator>
 #include <vector>

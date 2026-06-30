@@ -23,6 +23,7 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;

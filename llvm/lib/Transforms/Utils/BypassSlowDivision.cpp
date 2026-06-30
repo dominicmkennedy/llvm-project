@@ -31,6 +31,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 #include <cstdint>
 

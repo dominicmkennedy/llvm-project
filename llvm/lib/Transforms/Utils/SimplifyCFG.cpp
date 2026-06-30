@@ -77,6 +77,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LockstepReverseIterator.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <climits>

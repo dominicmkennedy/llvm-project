@@ -33,6 +33,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 
 #define DEBUG_TYPE "instcombine"

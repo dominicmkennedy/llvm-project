@@ -42,6 +42,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 #include <optional>
 #include <utility>

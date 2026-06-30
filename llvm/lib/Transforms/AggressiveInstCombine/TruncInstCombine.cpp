@@ -33,6 +33,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/Support/KnownBits.h"
+#include "llvm/Support/KBOptLog.h"
 
 using namespace llvm;
 
@@ -348,7 +349,7 @@ Type *TruncInstCombine::getBestTruncatedType() {
   if (MinBitWidth >= OrigBitWidth ||
       (DesiredBitWidth && DesiredBitWidth != MinBitWidth))
     return nullptr;
-
+  KBOPT_LOG();
   return IntegerType::get(CurrentTruncInst->getContext(), MinBitWidth);
 }
 

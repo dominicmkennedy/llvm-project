@@ -15,6 +15,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 using namespace llvm;
 using namespace PatternMatch;
 
