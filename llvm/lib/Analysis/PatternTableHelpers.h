@@ -55,9 +55,9 @@ inline std::array<APInt, 2> unpackOut(const unsigned char *zBytes,
 } // namespace detail
 
 template <unsigned Arity>
-inline std::array<APInt, 2> lookupKB(const std::array<APInt, 2> *args,
+inline std::array<APInt, 2> lookupKB(unsigned bw,
+                                     const std::array<APInt, 2> *args,
                                      const BwTable *tables, size_t numTables) {
-  unsigned bw = args[0][0].getBitWidth();
   unsigned maskBytes = (bw + 7) / 8;
   if (maskBytes > detail::kMaxMaskBytes)
     return {APInt(bw, 0), APInt(bw, 0)};
