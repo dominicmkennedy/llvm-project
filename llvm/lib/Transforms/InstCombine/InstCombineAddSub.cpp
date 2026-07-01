@@ -1013,8 +1013,10 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
   if (C->isOne()) {
     if (match(Op0, m_ZExt(m_Add(m_Value(X), m_AllOnes())))) {
       const SimplifyQuery Q = SQ.getWithInstruction(&Add);
-      if (llvm::isKnownNonZero(X, Q))
+      if (llvm::isKnownNonZero(X, Q)) {
+        KBOPT_LOG();
         return new ZExtInst(X, Ty);
+      }
     }
   }
 

@@ -542,9 +542,11 @@ Instruction *InstCombinerImpl::foldSelectIntoOp(SelectInst &SI, Value *TrueVal,
     // This makes the transformation incorrect since the original program would
     // have preserved the exact NaN bit-pattern.
     // Avoid the folding if the false value might be a NaN.
-    if (isa<FPMathOperator>(&SI) &&
-        !computeKnownFPClass(FalseVal, FMF, fcNan, &SI).isKnownNeverNaN())
-      return nullptr;
+    if (isa<FPMathOperator>(&SI)) {
+      if (!computeKnownFPClass(FalseVal, FMF, fcNan, &SI).isKnownNeverNaN())
+        return nullptr;
+      KBOPT_LOG();
+    }
 
     Value *NewSel = Builder.CreateSelect(SI.getCondition(), Swapped ? C : OOp,
                                          Swapped ? OOp : C, "", &SI);
@@ -639,6 +641,7 @@ static Value *foldSelectICmpMinMax(const ICmpInst *Cmp, Value *TVal,
   if (Pred == CmpInst::ICMP_ULT &&
       match(FVal, m_Add(m_Specific(CmpRHS), m_AllOnes())) &&
       isKnownNonZero(CmpRHS, SQ)) {
+    KBOPT_LOG();
     cast<Instruction>(FVal)->setHasNoSignedWrap(false);
     cast<Instruction>(FVal)->setHasNoUnsignedWrap(false);
     return Builder.CreateBinaryIntrinsic(Intrinsic::umin, TVal, FVal);
@@ -3041,8 +3044,10 @@ static Instruction *foldSelectWithSRem(SelectInst &SI, InstCombinerImpl &IC,
   if (match(TrueVal, m_c_Add(m_Specific(RemRes), m_Value(Remainder))) &&
       match(RemRes, m_SRem(m_Value(Op), m_Specific(Remainder))) &&
       IC.isKnownToBeAPowerOfTwo(Remainder, /*OrZero=*/true) &&
-      FalseVal == RemRes)
+      FalseVal == RemRes) {
+    KBOPT_LOG();
     return FoldToBitwiseAnd(Remainder);
+  }
 
   // Match the case where the one arm has been replaced by constant 1:
   // %rem = srem i32 %n, 2
@@ -4046,8 +4051,11 @@ bool InstCombinerImpl::fmulByZeroIsZero(Value *MulVal, FastMathFlags FMF,
                                         const Instruction *CtxI) const {
   KnownFPClass Known = computeKnownFPClass(MulVal, FMF, fcNegative, CtxI);
 
-  return Known.isKnownNeverNaN() && Known.isKnownNeverInfinity() &&
-         (FMF.noSignedZeros() || Known.signBitIsZeroOrNaN());
+  bool Result = Known.isKnownNeverNaN() && Known.isKnownNeverInfinity() &&
+                (FMF.noSignedZeros() || Known.signBitIsZeroOrNaN());
+  if (Result)
+    KBOPT_LOG();
+  return Result;
 }
 
 static bool matchFMulByZeroIfResultEqZero(InstCombinerImpl &IC, Value *Cmp0,
@@ -4168,6 +4176,7 @@ static Value *foldSelectBitTest(SelectInst &Sel, Value *CondVal, Value *TrueVal,
   Value *V;
   APInt AndMask;
   bool CreateAnd = false;
+  bool KnownBitsConstrainedMask = false;
   CmpPredicate Pred;
   Value *CmpLHS, *CmpRHS;
 
@@ -4186,10 +4195,12 @@ static Value *foldSelectBitTest(SelectInst &Sel, Value *CondVal, Value *TrueVal,
       assert(ICmpInst::isEquality(Res->Pred) && "Not equality test?");
       AndMask = Res->Mask;
       V = Res->X;
+      bool MaskWasPowerOf2 = AndMask.isPowerOf2();
       KnownBits Known = computeKnownBits(V, SQ.getWithInstruction(&Sel));
       AndMask &= Known.getMaxValue();
       if (!AndMask.isPowerOf2())
         return nullptr;
+      KnownBitsConstrainedMask = !MaskWasPowerOf2;
 
       Pred = Res->Pred;
       CreateAnd = true;
@@ -4210,13 +4221,15 @@ static Value *foldSelectBitTest(SelectInst &Sel, Value *CondVal, Value *TrueVal,
 
   if (Value *X = foldSelectICmpAnd(Sel, CondVal, TrueVal, FalseVal, V, AndMask,
                                    CreateAnd, Builder)) {
-    KBOPT_LOG();
+    if (KnownBitsConstrainedMask)
+      KBOPT_LOG();
     return X;
   }
 
   if (Value *X = foldSelectICmpAndBinOp(CondVal, TrueVal, FalseVal, V, AndMask,
                                         CreateAnd, Builder)) {
-    KBOPT_LOG();
+    if (KnownBitsConstrainedMask)
+      KBOPT_LOG();
     return X;
   }
 

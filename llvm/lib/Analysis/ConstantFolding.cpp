@@ -818,8 +818,10 @@ Constant *SymbolicallyEvaluateBinop(unsigned Opc, Constant *Op0, Constant *Op1,
     }
 
     Known0 &= Known1;
-    if (Known0.isConstant())
+    if (Known0.isConstant()) {
+      KBOPT_LOG();
       return ConstantInt::get(Op0->getType(), Known0.getConstant());
+    }
   }
 
   // If the constant expr is something like &A[123] - &A[4].f, fold this into a

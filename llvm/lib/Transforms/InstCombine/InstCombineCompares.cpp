@@ -1204,10 +1204,14 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
   if (Pred == ICmpInst::ICMP_SGT) {
     Value *A, *B;
     if (match(Cmp.getOperand(0), m_SMin(m_Value(A), m_Value(B)))) {
-      if (isKnownPositive(A, SQ.getWithInstruction(&Cmp)))
+      if (isKnownPositive(A, SQ.getWithInstruction(&Cmp))) {
+        KBOPT_LOG();
         return new ICmpInst(Pred, B, Cmp.getOperand(1));
-      if (isKnownPositive(B, SQ.getWithInstruction(&Cmp)))
+      }
+      if (isKnownPositive(B, SQ.getWithInstruction(&Cmp))) {
+        KBOPT_LOG();
         return new ICmpInst(Pred, A, Cmp.getOperand(1));
+      }
     }
   }
 
@@ -1258,13 +1262,17 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
 
       // if X non-zero and NoOverflow(X * Y)
       //    (icmp eq/ne Y)
-      if (!XKnown.One.isZero() || isKnownNonZero(X, Q))
+      if (!XKnown.One.isZero() || isKnownNonZero(X, Q)) {
+        KBOPT_LOG();
         return new ICmpInst(Pred, Y, Cmp.getOperand(1));
+      }
 
       // if Y non-zero and NoOverflow(X * Y)
       //    (icmp eq/ne X)
-      if (!YKnown.One.isZero() || isKnownNonZero(Y, Q))
+      if (!YKnown.One.isZero() || isKnownNonZero(Y, Q)) {
+        KBOPT_LOG();
         return new ICmpInst(Pred, X, Cmp.getOperand(1));
+      }
     }
     // Note, we are skipping cases:
     //      if Y % 2 != 0 AND X % 2 != 0
@@ -3245,8 +3253,10 @@ Instruction *InstCombinerImpl::foldICmpAddConstant(ICmpInst &Cmp,
   // (X + -1) <u C --> X <=u C (if X is never null)
   if (Pred == CmpInst::ICMP_ULT && C2->isAllOnes()) {
     const SimplifyQuery Q = SQ.getWithInstruction(&Cmp);
-    if (llvm::isKnownNonZero(X, Q))
+    if (llvm::isKnownNonZero(X, Q)) {
+      KBOPT_LOG();
       return new ICmpInst(ICmpInst::ICMP_ULE, X, ConstantInt::get(Ty, C));
+    }
   }
 
   if (!Add->hasOneUse())
@@ -3695,6 +3705,7 @@ Instruction *InstCombinerImpl::foldICmpBinOpEqualityWithConstant(
       if (Pred == ICmpInst::ICMP_EQ
               ? (match(TV, m_Zero()) && isKnownNonZero(FV, Q))
               : (match(FV, m_Zero()) && isKnownNonZero(TV, Q))) {
+        KBOPT_LOG();
         Value *Cmp = Builder.CreateICmp(
             Pred, Other, Constant::getNullValue(Other->getType()));
         return BinaryOperator::Create(
@@ -3717,6 +3728,7 @@ Instruction *InstCombinerImpl::foldICmpBinOpEqualityWithConstant(
           (Pred == ICmpInst::ICMP_EQ
                ? (match(FV, m_Zero()) && isKnownNonZero(TV, Q))
                : (match(TV, m_Zero()) && isKnownNonZero(FV, Q)))) {
+        KBOPT_LOG();
         Value *NotCond = Builder.CreateNot(Cond);
         Value *Cmp = Builder.CreateICmp(
             Pred, Other, Constant::getNullValue(Other->getType()));
@@ -4571,13 +4583,24 @@ static Value *foldICmpWithLowBitMaskedVal(CmpPredicate Pred, Value *Op0,
       X = Op1;
       // Look for: x & Mask pred x
       if (isMaskOrZero(M, /*Not=*/false, Q)) {
-        return !ICmpInst::isSigned(Pred) ||
-               (match(M, m_NonNegative()) || isKnownNonNegative(M, Q));
+        if (!ICmpInst::isSigned(Pred) || match(M, m_NonNegative()))
+          return true;
+        if (isKnownNonNegative(M, Q)) {
+          KBOPT_LOG();
+          return true;
+        }
+        return false;
       }
 
       // Look for: x & ~Mask pred ~Mask
       if (isMaskOrZero(X, /*Not=*/true, Q)) {
-        return !ICmpInst::isSigned(Pred) || isKnownNonZero(X, Q);
+        if (!ICmpInst::isSigned(Pred))
+          return true;
+        if (isKnownNonZero(X, Q)) {
+          KBOPT_LOG();
+          return true;
+        }
+        return false;
       }
       return false;
     }
@@ -4816,8 +4839,10 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
     return nullptr;
 
   // An extra legality check is needed if we had trunc-of-lshr.
+  bool CanFoldByKnownBits = false;
   if (HadTrunc && match(WidestShift, m_LShr(m_Value(), m_Value()))) {
     auto CanFold = [NewShAmt, WidestBitWidth, NarrowestShift, SQ,
+                    &CanFoldByKnownBits,
                     WidestShift]() {
       // It isn't obvious whether it's worth it to analyze non-constants here.
       // Also, let's basically give up on non-splat cases, pessimizing vectors.
@@ -4837,25 +4862,34 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
         unsigned MinLeadZero = Known.countMinLeadingZeros();
         // If the value being shifted has at most lowest bit set we can fold.
         unsigned MaxActiveBits = Known.getBitWidth() - MinLeadZero;
-        if (MaxActiveBits <= 1)
+        if (MaxActiveBits <= 1) {
+          CanFoldByKnownBits = true;
           return true;
+        }
         // Precondition:  NewShAmt u<= countLeadingZeros(C)
-        if (NewShAmtSplat && NewShAmtSplat->getUniqueInteger().ule(MinLeadZero))
+        if (NewShAmtSplat &&
+            NewShAmtSplat->getUniqueInteger().ule(MinLeadZero)) {
+          CanFoldByKnownBits = true;
           return true;
+        }
       }
       if (auto *C = dyn_cast<Constant>(WidestShift->getOperand(0))) {
         KnownBits Known = computeKnownBits(C, SQ.DL);
         unsigned MinLeadZero = Known.countMinLeadingZeros();
         // If the value being shifted has at most lowest bit set we can fold.
         unsigned MaxActiveBits = Known.getBitWidth() - MinLeadZero;
-        if (MaxActiveBits <= 1)
+        if (MaxActiveBits <= 1) {
+          CanFoldByKnownBits = true;
           return true;
+        }
         // Precondition:  ((WidestBitWidth-1)-NewShAmt) u<= countLeadingZeros(C)
         if (NewShAmtSplat) {
           APInt AdjNewShAmt =
               (WidestBitWidth - 1) - NewShAmtSplat->getUniqueInteger();
-          if (AdjNewShAmt.ule(MinLeadZero))
+          if (AdjNewShAmt.ule(MinLeadZero)) {
+            CanFoldByKnownBits = true;
             return true;
+          }
         }
       }
       return false; // Can't tell if it's ok.
@@ -4872,7 +4906,8 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
                   ? Builder.CreateLShr(X, NewShAmt)
                   : Builder.CreateShl(X, NewShAmt);
   Value *T1 = Builder.CreateAnd(T0, Y);
-  KBOPT_LOG();
+  if (CanFoldByKnownBits)
+    KBOPT_LOG();
   return Builder.CreateICmp(I.getPredicate(), T1,
                             Constant::getNullValue(WidestTy));
 }
@@ -5104,8 +5139,10 @@ static Instruction *foldICmpXorXX(ICmpInst &I, const SimplifyQuery &Q,
   // icmp (X ^ Y_NonZero) s>= X --> icmp (X ^ Y_NonZero) s> X
   // icmp (X ^ Y_NonZero) s<= X --> icmp (X ^ Y_NonZero) s< X
   CmpInst::Predicate PredOut = CmpInst::getStrictPredicate(Pred);
-  if (PredOut != Pred && isKnownNonZero(A, Q))
+  if (PredOut != Pred && isKnownNonZero(A, Q)) {
+    KBOPT_LOG();
     return new ICmpInst(PredOut, Op0, Op1);
+  }
 
   // These transform work when A is negative.
   // X s< X^A, X s<= X^A, X u> X^A, X u>= X^A  --> X s< 0
@@ -5429,12 +5466,16 @@ Instruction *InstCombinerImpl::foldICmpBinOp(ICmpInst &I,
     return new ICmpInst(Pred, C, D);
   // (A - B) u>=/u< A --> B u>/u<= A  iff B != 0
   if (A == Op1 && (Pred == ICmpInst::ICMP_UGE || Pred == ICmpInst::ICMP_ULT) &&
-      isKnownNonZero(B, Q))
+      isKnownNonZero(B, Q)) {
+    KBOPT_LOG();
     return new ICmpInst(CmpInst::getFlippedStrictnessPredicate(Pred), B, A);
+  }
   // C u<=/u> (C - D) --> C u</u>= D  iff B != 0
   if (C == Op0 && (Pred == ICmpInst::ICMP_ULE || Pred == ICmpInst::ICMP_UGT) &&
-      isKnownNonZero(D, Q))
+      isKnownNonZero(D, Q)) {
+    KBOPT_LOG();
     return new ICmpInst(CmpInst::getFlippedStrictnessPredicate(Pred), C, D);
+  }
 
   // icmp (A-B), (C-B) -> icmp A, C for equalities or if there is no overflow.
   if (B && D && B == D && NoOp0WrapProblem && NoOp1WrapProblem)

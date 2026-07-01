@@ -3511,6 +3511,7 @@ Instruction *InstCombinerImpl::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       all_of(GEP.indices(), [&](Value *Idx) {
         return isKnownNonNegative(Idx, SQ.getWithInstruction(&GEP));
       })) {
+    KBOPT_LOG();
     GEP.setNoWrapFlags(GEP.getNoWrapFlags() | GEPNoWrapFlags::noUnsignedWrap());
     return &GEP;
   }

@@ -77,7 +77,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>

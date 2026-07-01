@@ -1260,9 +1260,11 @@ bool VectorCombine::scalarizeVPIntrinsic(Instruction &I) {
   else
     SafeToSpeculate = isSafeToSpeculativelyExecuteWithOpcode(
         *FunctionalOpcode, &VPI, nullptr, &AC, &DT);
-  if (!SafeToSpeculate &&
-      !isKnownNonZero(EVL, SimplifyQuery(*DL, &DT, &AC, &VPI)))
-    return false;
+  if (!SafeToSpeculate) {
+    if (!isKnownNonZero(EVL, SimplifyQuery(*DL, &DT, &AC, &VPI)))
+      return false;
+    KBOPT_LOG();
+  }
 
   Value *ScalarVal =
       ScalarIntrID
@@ -4517,6 +4519,7 @@ bool VectorCombine::shrinkType(Instruction &I) {
   auto *BigTy = cast<FixedVectorType>(I.getType());
   auto *SmallTy = cast<FixedVectorType>(ZExted->getType());
   unsigned BW = SmallTy->getElementType()->getPrimitiveSizeInBits();
+  bool EnabledByKnownBits = false;
 
   if (I.getOpcode() == Instruction::LShr) {
     // Check that the shift amount is less than the number of bits in the
@@ -4524,12 +4527,14 @@ bool VectorCombine::shrinkType(Instruction &I) {
     KnownBits ShAmtKB = computeKnownBits(I.getOperand(1), *DL);
     if (ShAmtKB.getMaxValue().uge(BW))
       return false;
+    EnabledByKnownBits = APInt::getAllOnes(ShAmtKB.getBitWidth()).uge(BW);
   } else {
     // Check that the expression overall uses at most the same number of bits as
     // ZExted
     KnownBits KB = computeKnownBits(&I, *DL);
     if (KB.countMaxActiveBits() > BW)
       return false;
+    EnabledByKnownBits = KB.getBitWidth() > BW;
   }
 
   // Calculate costs of leaving current IR as it is and moving ZExt operation
@@ -4559,6 +4564,8 @@ bool VectorCombine::shrinkType(Instruction &I) {
     KnownBits KB = computeKnownBits(UI, *DL);
     if (KB.countMaxActiveBits() > BW)
       return false;
+    if (KB.getBitWidth() > BW)
+      EnabledByKnownBits = true;
 
     CurrentCost += TTI.getArithmeticInstrCost(UI->getOpcode(), BigTy, CostKind);
     ShrinkCost +=
@@ -4590,6 +4597,8 @@ bool VectorCombine::shrinkType(Instruction &I) {
   cast<Instruction>(NewBinOp)->copyIRFlags(&I);
   cast<Instruction>(NewBinOp)->copyMetadata(I);
   Value *NewZExtr = Builder.CreateZExt(NewBinOp, BigTy);
+  if (EnabledByKnownBits)
+    KBOPT_LOG();
   replaceValue(I, *NewZExtr);
   return true;
 }

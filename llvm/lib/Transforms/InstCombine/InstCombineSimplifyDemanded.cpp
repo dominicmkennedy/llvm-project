@@ -284,15 +284,21 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
     // If the client is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(VTy, Known.One);
+    }
 
     // If all of the demanded bits are known 1 on one side, return the other.
     // These bits cannot contribute to the result of the 'and'.
-    if (DemandedMask.isSubsetOf(LHSKnown.Zero | RHSKnown.One))
+    if (DemandedMask.isSubsetOf(LHSKnown.Zero | RHSKnown.One)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedMask.isSubsetOf(RHSKnown.Zero | LHSKnown.One))
+    }
+    if (DemandedMask.isSubsetOf(RHSKnown.Zero | LHSKnown.One)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     // If the RHS is a constant, see if we can simplify it.
     if (ShrinkDemandedConstant(I, 1, DemandedMask & ~LHSKnown.Zero))
@@ -315,15 +321,21 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
     // If the client is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(VTy, Known.One);
+    }
 
     // If all of the demanded bits are known zero on one side, return the other.
     // These bits cannot contribute to the result of the 'or'.
-    if (DemandedMask.isSubsetOf(LHSKnown.One | RHSKnown.Zero))
+    if (DemandedMask.isSubsetOf(LHSKnown.One | RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedMask.isSubsetOf(RHSKnown.One | LHSKnown.Zero))
+    }
+    if (DemandedMask.isSubsetOf(RHSKnown.One | LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     // If the RHS is a constant, see if we can simplify it.
     if (ShrinkDemandedConstant(I, 1, DemandedMask))
@@ -334,6 +346,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
       WithCache<const Value *> LHSCache(I->getOperand(0), LHSKnown),
           RHSCache(I->getOperand(1), RHSKnown);
       if (haveNoCommonBitsSet(LHSCache, RHSCache, Q)) {
+        KBOPT_LOG();
         cast<PossiblyDisjointInst>(I)->setIsDisjoint(true);
         return I;
       }
@@ -361,15 +374,21 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
     // If the client is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(VTy, Known.One);
+    }
 
     // If all of the demanded bits are known zero on one side, return the other.
     // These bits cannot contribute to the result of the 'xor'.
-    if (DemandedMask.isSubsetOf(RHSKnown.Zero))
+    if (DemandedMask.isSubsetOf(RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedMask.isSubsetOf(LHSKnown.Zero))
+    }
+    if (DemandedMask.isSubsetOf(LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     // If all of the demanded bits are known to be zero on one side or the
     // other, turn this into an *inclusive* or.
@@ -380,6 +399,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
       if (DemandedMask.isAllOnes())
         cast<PossiblyDisjointInst>(Or)->setIsDisjoint(true);
       Or->takeName(I);
+      KBOPT_LOG();
       return InsertNewInstWith(Or, I->getIterator());
     }
 
@@ -392,6 +412,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
       Constant *AndC = Constant::getIntegerValue(VTy,
                                                  ~RHSKnown.One & DemandedMask);
       Instruction *And = BinaryOperator::CreateAnd(I->getOperand(0), AndC);
+      KBOPT_LOG();
       return InsertNewInstWith(And, I->getIterator());
     }
 
@@ -428,6 +449,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
         Constant *XorC = ConstantInt::get(VTy, NewMask & XorRHS->getValue());
         Instruction *NewXor = BinaryOperator::CreateXor(NewAnd, XorC);
+        KBOPT_LOG();
         return InsertNewInstWith(NewXor, I->getIterator());
       }
     }
@@ -538,8 +560,10 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
     // If the input sign bit is known zero, or if the NewBits are not demanded
     // convert this into a zero extension.
-    if (InputKnown.isNonNegative() ||
-        DemandedMask.getActiveBits() <= SrcBitWidth) {
+    bool SignBitKnownZero = InputKnown.isNonNegative();
+    if (SignBitKnownZero || DemandedMask.getActiveBits() <= SrcBitWidth) {
+      if (SignBitKnownZero)
+        KBOPT_LOG();
       // Convert to ZExt cast.
       CastInst *NewCast = new ZExtInst(I->getOperand(0), VTy);
       NewCast->takeName(I);
@@ -609,10 +633,14 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
     // If we are known to be adding zeros to every bit below
     // the highest demanded bit, we just return the other side.
-    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero))
+    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedFromOps.isSubsetOf(LHSKnown.Zero))
+    }
+    if (DemandedFromOps.isSubsetOf(LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     // (add X, C) --> (xor X, C) IFF C is equal to the top bit of the DemandMask
     {
@@ -652,12 +680,16 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
     // If we are known to be subtracting zeros from every bit below
     // the highest demanded bit, we just return the other side.
-    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero))
+    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
+    }
     // We can't do this with the LHS for subtraction, unless we are only
     // demanding the LSB.
-    if (DemandedFromOps.isOne() && DemandedFromOps.isSubsetOf(LHSKnown.Zero))
+    if (DemandedFromOps.isOne() && DemandedFromOps.isSubsetOf(LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     // Canonicalize sub mask, X -> ~X
     const APInt *LHSC;
@@ -906,7 +938,10 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
 
       // If the input sign bit is known to be zero, or if none of the shifted in
       // bits are demanded, turn this into an unsigned shift right.
-      if (Known.Zero[BitWidth - 1] || !ShiftedInBitsDemanded) {
+      bool SignBitKnownZero = Known.Zero[BitWidth - 1];
+      if (SignBitKnownZero || !ShiftedInBitsDemanded) {
+        if (SignBitKnownZero)
+          KBOPT_LOG();
         BinaryOperator *LShr = BinaryOperator::CreateLShr(I->getOperand(0),
                                                           I->getOperand(1));
         LShr->setIsExact(cast<BinaryOperator>(I)->isExact());
@@ -1031,16 +1066,20 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
         // provenance, but making the mask zero will be easily optimizable in
         // the backend.
         if (DemandedMask.isSubsetOf(Known.Zero) &&
-            !match(I->getOperand(1), m_Zero()))
+            !match(I->getOperand(1), m_Zero())) {
+          KBOPT_LOG();
           return replaceOperand(
               *I, 1, Constant::getNullValue(I->getOperand(1)->getType()));
+        }
 
         // Mask in demanded space does nothing.
         // NOTE: We may have attributes associated with the return value of the
         // llvm.ptrmask intrinsic that will be lost when we just return the
         // operand. We should try to preserve them.
-        if (DemandedMask.isSubsetOf(RHSKnown.One | LHSKnown.Zero))
+        if (DemandedMask.isSubsetOf(RHSKnown.One | LHSKnown.Zero)) {
+          KBOPT_LOG();
           return I->getOperand(0);
+        }
 
         // If the RHS is a constant, see if we can simplify it.
         if (ShrinkDemandedConstant(
@@ -1079,6 +1118,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
                   ConstantInt::get(GEPIndexType, MaskedGEPIndex),
                   GEP->getName(), GEP->isInBounds());
 
+              KBOPT_LOG();
               replaceOperand(*I, 0, MaskedGEP);
               return I;
             }
@@ -1187,8 +1227,10 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
   // pointer provenance.
   // TODO: We could return `(inttoptr const)` for pointers.
   if (!I->getType()->isPointerTy() &&
-      DemandedMask.isSubsetOf(Known.Zero | Known.One))
+      DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+    KBOPT_LOG();
     return Constant::getIntegerValue(VTy, Known.One);
+  }
 
   if (VerifyKnownBits) {
     KnownBits ReferenceKnown = llvm::computeKnownBits(I, Q, Depth);
@@ -1355,7 +1397,7 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
     // If this user is only demanding bits that we know, return the known
     // constant.
     if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
-      KBOPT_LOG();      
+      KBOPT_LOG();
       return Constant::getIntegerValue(ITy, Known.One);
     }
 

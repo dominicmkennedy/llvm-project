@@ -153,8 +153,15 @@ bool inferAlignment(Function &F, AssumptionCache &AC, DominatorTree &DT) {
     for (Instruction &I : BB) {
       Changed |= tryToImproveAlign(
           DL, &I, [&](Value *PtrOp, Align OldAlign, Align PrefAlign) {
-            return std::max(InferFromKnownBits(I, PtrOp),
-                            InferFromBasePointer(PtrOp, OldAlign));
+            Align KnownBitsAlign = InferFromKnownBits(I, PtrOp);
+            Align Result = std::max(
+                KnownBitsAlign, InferFromBasePointer(PtrOp, OldAlign));
+            // The known-bits-derived alignment is itself already an
+            // improvement, so this transformation fires regardless of
+            // whether base-pointer propagation improves on it further.
+            if (KnownBitsAlign > OldAlign)
+              KBOPT_LOG();
+            return Result;
           });
     }
   }

@@ -23,7 +23,6 @@
 #include "llvm/Support/KBOptLog.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Support/KBOptLog.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -1142,11 +1141,15 @@ static Value *foldUnsignedUnderflowCheck(ICmpInst *ZeroICmp,
     //     with X being the value (A/B) that is known to be non-zero,
     //     and Y being remaining value.
     if (UnsignedPred == ICmpInst::ICMP_ULT && EqPred == ICmpInst::ICMP_NE &&
-        IsAnd && GetKnownNonZeroAndOther(B, A))
+        IsAnd && GetKnownNonZeroAndOther(B, A)) {
+      KBOPT_LOG();
       return Builder.CreateICmpULT(Builder.CreateNeg(B), A);
+    }
     if (UnsignedPred == ICmpInst::ICMP_UGE && EqPred == ICmpInst::ICMP_EQ &&
-        !IsAnd && GetKnownNonZeroAndOther(B, A))
+        !IsAnd && GetKnownNonZeroAndOther(B, A)) {
+      KBOPT_LOG();
       return Builder.CreateICmpUGE(Builder.CreateNeg(B), A);
+    }
   }
 
   return nullptr;
@@ -5063,8 +5066,10 @@ Instruction *InstCombinerImpl::foldNot(BinaryOperator &I) {
     // Treat lshr with non-negative operand as ashr.
     // ~(~X >>u Y) --> (X >>s Y) iff X is known negative
     if (match(NotVal, m_LShr(m_Not(m_Value(X)), m_Value(Y))) &&
-        isKnownNegative(X, SQ.getWithInstruction(NotVal)))
+        isKnownNegative(X, SQ.getWithInstruction(NotVal))) {
+      KBOPT_LOG();
       return BinaryOperator::CreateAShr(X, Y);
+    }
 
     // Bit-hack form of a signbit test for iN type:
     // ~(X >>s (N - 1)) --> sext i1 (X > -1) to iN

@@ -295,6 +295,8 @@ Type *TruncInstCombine::getBestTruncatedType() {
 
   unsigned OrigBitWidth =
       CurrentTruncInst->getOperand(0)->getType()->getScalarSizeInBits();
+  bool KnownBitsContributed = false;
+  bool UsedComputeNumSignBits = false;
 
   // Initialize MinBitWidth for shift instructions with the minimum number
   // that is greater than shift amount (i.e. shift amount + 1).
@@ -311,15 +313,24 @@ Type *TruncInstCombine::getBestTruncatedType() {
       unsigned MinBitWidth = KnownRHS.getMaxValue()
                                  .uadd_sat(APInt(OrigBitWidth, 1))
                                  .getLimitedValue(OrigBitWidth);
+      unsigned TopRHSMinBitWidth =
+          APInt::getAllOnes(KnownRHS.getBitWidth())
+              .uadd_sat(APInt(OrigBitWidth, 1))
+              .getLimitedValue(OrigBitWidth);
+      if (TopRHSMinBitWidth >= OrigBitWidth && MinBitWidth < OrigBitWidth)
+        KnownBitsContributed = true;
       if (MinBitWidth == OrigBitWidth)
         return nullptr;
       if (I->getOpcode() == Instruction::LShr) {
         KnownBits KnownLHS = computeKnownBits(I->getOperand(0));
+        if (KnownLHS.getMaxValue().getActiveBits() < OrigBitWidth)
+          KnownBitsContributed = true;
         MinBitWidth =
             std::max(MinBitWidth, KnownLHS.getMaxValue().getActiveBits());
       }
       if (I->getOpcode() == Instruction::AShr) {
         unsigned NumSignBits = ComputeNumSignBits(I->getOperand(0));
+        UsedComputeNumSignBits = true;
         MinBitWidth = std::max(MinBitWidth, OrigBitWidth - NumSignBits + 1);
       }
       if (MinBitWidth >= OrigBitWidth)
@@ -331,6 +342,8 @@ Type *TruncInstCombine::getBestTruncatedType() {
       unsigned MinBitWidth = 0;
       for (const auto &Op : I->operands()) {
         KnownBits Known = computeKnownBits(Op);
+        if (Known.getMaxValue().getActiveBits() < OrigBitWidth)
+          KnownBitsContributed = true;
         MinBitWidth =
             std::max(Known.getMaxValue().getActiveBits(), MinBitWidth);
         if (MinBitWidth >= OrigBitWidth)
@@ -349,7 +362,8 @@ Type *TruncInstCombine::getBestTruncatedType() {
   if (MinBitWidth >= OrigBitWidth ||
       (DesiredBitWidth && DesiredBitWidth != MinBitWidth))
     return nullptr;
-  KBOPT_LOG();
+  if (KnownBitsContributed && !UsedComputeNumSignBits)
+    KBOPT_LOG();
   return IntegerType::get(CurrentTruncInst->getContext(), MinBitWidth);
 }
 

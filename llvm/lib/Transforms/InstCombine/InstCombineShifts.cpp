@@ -994,14 +994,12 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
     // shr (shl X, Y), Y
     if (match(I.getOperand(0), m_Shl(m_Value(), m_Specific(I.getOperand(1))))) {
       I.setIsExact();
-      KBOPT_LOG();
       return true;
     }
     // Infer 'exact' flag if shift amount is cttz(x) on the same operand.
     if (match(I.getOperand(1), m_Intrinsic<Intrinsic::cttz>(
                                    m_Specific(I.getOperand(0)), m_Value()))) {
       I.setIsExact();
-      KBOPT_LOG();
       return true;
     }
   }
@@ -1017,22 +1015,32 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
   bool Changed = false;
 
   if (I.getOpcode() == Instruction::Shl) {
+    bool LoggedKnownBitsChange = false;
+    auto LogKnownBitsChange = [&]() {
+      if (!LoggedKnownBitsChange) {
+        KBOPT_LOG();
+        LoggedKnownBitsChange = true;
+      }
+    };
+
     // If we have as many leading zeros than maximum shift cnt we have nuw.
     if (!I.hasNoUnsignedWrap() && MaxCnt <= KnownAmt.countMinLeadingZeros()) {
       I.setHasNoUnsignedWrap();
       Changed = true;
+      LogKnownBitsChange();
     }
     // If we have more sign bits than maximum shift cnt we have nsw.
     if (!I.hasNoSignedWrap()) {
-      if (MaxCnt < KnownAmt.countMinSignBits() ||
-          MaxCnt <
-              ComputeNumSignBits(I.getOperand(0), Q.DL, Q.AC, Q.CxtI, Q.DT)) {
+      bool NSWByKnownBits = MaxCnt < KnownAmt.countMinSignBits();
+      if (NSWByKnownBits) {
+        I.setHasNoSignedWrap();
+        Changed = true;
+        LogKnownBitsChange();
+      } else if (MaxCnt < ComputeNumSignBits(I.getOperand(0), Q.DL, Q.AC,
+                                             Q.CxtI, Q.DT)) {
         I.setHasNoSignedWrap();
         Changed = true;
       }
-    }
-    if (Changed) {
-          KBOPT_LOG();
     }
     return Changed;
   }
