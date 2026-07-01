@@ -1855,6 +1855,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
       (match(Op1, m_Power2(Op1C)) || match(Op1, m_NegatedPower2(Op1C))) &&
       KnownDividend.countMinTrailingZeros() >= Op1C->countr_zero()) {
     I.setIsExact();
+    KBOPT_LOG();
     return &I;
   }
 

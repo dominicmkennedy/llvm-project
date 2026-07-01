@@ -1006,6 +1006,7 @@ static Instruction *replaceGEPIdxWithZero(InstCombinerImpl &IC, Value *Ptr,
       NewGEPI->setOperand(Idx,
         ConstantInt::get(GEPI->getOperand(Idx)->getType(), 0));
       IC.InsertNewInstBefore(NewGEPI, GEPI->getIterator());
+      KBOPT_LOG();
       return NewGEPI;
     }
   }

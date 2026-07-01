@@ -4442,6 +4442,7 @@ Instruction *InstCombinerImpl::visitSwitchInst(SwitchInst &SI) {
       APInt TruncatedCase = Case.getCaseValue()->getValue().trunc(NewWidth);
       Case.setValue(ConstantInt::get(SI.getContext(), TruncatedCase));
     }
+    KBOPT_LOG();
     return replaceOperand(SI, 0, NewCond);
   }
 

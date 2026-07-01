@@ -855,6 +855,7 @@ bool GuardWideningImpl::parseRangeChecks(
         Check.setBase(OpLHS);
         APInt NewOffset = Check.getOffsetValue() + OpRHS->getValue();
         Check.setOffset(ConstantInt::get(Ctx, NewOffset));
+        KBOPT_LOG();
         Changed = true;
       }
     }
