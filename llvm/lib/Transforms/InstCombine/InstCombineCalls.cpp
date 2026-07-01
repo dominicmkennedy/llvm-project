@@ -634,9 +634,10 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   // because we know the zero behavior can't affect the result.
   if (!Known.One.isZero() ||
       isKnownNonZero(Op0, IC.getSimplifyQuery().getWithInstruction(&II))) {
-    if (!match(II.getArgOperand(1), m_One()))
+    if (!match(II.getArgOperand(1), m_One())) {
       KBOPT_LOG();
       return IC.replaceOperand(II, 1, IC.Builder.getTrue());
+    }
   }
 
   // Add range attribute since known bits can't completely reflect what we know.
