@@ -1030,6 +1030,7 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
           (isa<GlobalVariable>(GEP->getOperand(0)) &&
            NullTermIdx == Slice.Length - 1)) {
         Offset = B.CreateSExtOrTrunc(Offset, CI->getType());
+        KBOPT_LOG();
         return B.CreateSub(ConstantInt::get(CI->getType(), NullTermIdx),
                            Offset);
       }
