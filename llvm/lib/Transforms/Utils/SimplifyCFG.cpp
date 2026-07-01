@@ -77,6 +77,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LockstepReverseIterator.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <climits>
@@ -6145,6 +6146,7 @@ static bool eliminateDeadSwitchCases(SwitchInst *SI, DomTreeUpdater *DTU,
         --NumPerSuccessorCases[Successor];
       LLVM_DEBUG(dbgs() << "SimplifyCFG: switch case " << CaseVal
                         << " is dead.\n");
+      KBOPT_LOG();
     } else if (IsKnownValuesValid)
       KnownValues.erase(CaseC);
   }
@@ -6628,6 +6630,7 @@ static Value *foldSwitchToSelect(const SwitchCaseResultVectorTy &ResultVector,
                 {accumulate(drop_begin(BranchWeights), 0U), BranchWeights[0]},
                 /*IsExpected=*/false, /*ElideAllZero=*/true);
           }
+          KBOPT_LOG();
           return Ret;
         }
       }

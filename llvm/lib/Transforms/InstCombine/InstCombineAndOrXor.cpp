@@ -23,6 +23,7 @@
 #include "llvm/Support/KBOptLog.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -2992,7 +2993,12 @@ InstCombinerImpl::convertOrOfShiftsToFunnelShift(Instruction &Or) {
       // final codegen will match this original pattern.
       if (match(R, m_OneUse(m_Sub(m_SpecificInt(Width), m_Specific(L))))) {
         KnownBits KnownL = computeKnownBits(L, &Or);
-        return KnownL.getMaxValue().ult(Width) ? L : nullptr;
+        if (KnownL.getMaxValue().ult(Width)) {
+          KBOPT_LOG();
+          return L;
+        } else {
+          return nullptr;
+        }
       }
 
       // For non-constant cases, the following patterns currently only work for

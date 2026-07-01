@@ -42,6 +42,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 #include <optional>
 #include <utility>
@@ -4208,12 +4209,16 @@ static Value *foldSelectBitTest(SelectInst &Sel, Value *CondVal, Value *TrueVal,
     std::swap(TrueVal, FalseVal);
 
   if (Value *X = foldSelectICmpAnd(Sel, CondVal, TrueVal, FalseVal, V, AndMask,
-                                   CreateAnd, Builder))
+                                   CreateAnd, Builder)) {
+    KBOPT_LOG();
     return X;
+  }
 
   if (Value *X = foldSelectICmpAndBinOp(CondVal, TrueVal, FalseVal, V, AndMask,
-                                        CreateAnd, Builder))
+                                        CreateAnd, Builder)) {
+    KBOPT_LOG();
     return X;
+  }
 
   return nullptr;
 }
@@ -4613,10 +4618,14 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
   if (!CondVal->getType()->isVectorTy() && !AC.assumptions().empty()) {
     KnownBits Known(1);
     computeKnownBits(CondVal, Known, &SI);
-    if (Known.One.isOne())
+    if (Known.One.isOne()) {
+      KBOPT_LOG();
       return replaceInstUsesWith(SI, TrueVal);
-    if (Known.Zero.isOne())
+    }
+    if (Known.Zero.isOne()) {
+      KBOPT_LOG();
       return replaceInstUsesWith(SI, FalseVal);
+    }
   }
 
   if (Instruction *BitCastSel = foldSelectCmpBitcasts(SI, Builder))
@@ -4778,18 +4787,22 @@ Instruction *InstCombinerImpl::visitSelectInst(SelectInst &SI) {
       if (!isa<Constant>(TrueVal) &&
           hasAffectedValue(TrueVal, CC.AffectedValues, /*Depth=*/0)) {
         KnownBits Known = llvm::computeKnownBits(TrueVal, Q);
-        if (Known.isConstant())
+        if (Known.isConstant()) {
+          KBOPT_LOG();
           return replaceOperand(SI, 1,
                                 ConstantInt::get(SelType, Known.getConstant()));
+        }
       }
 
       CC.Invert = true;
       if (!isa<Constant>(FalseVal) &&
           hasAffectedValue(FalseVal, CC.AffectedValues, /*Depth=*/0)) {
         KnownBits Known = llvm::computeKnownBits(FalseVal, Q);
-        if (Known.isConstant())
+        if (Known.isConstant()) {
+          KBOPT_LOG();
           return replaceOperand(SI, 2,
                                 ConstantInt::get(SelType, Known.getConstant()));
+        }
       }
     }
   }

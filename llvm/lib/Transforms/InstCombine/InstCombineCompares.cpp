@@ -31,6 +31,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 #include <bitset>
 
 using namespace llvm;
@@ -1222,8 +1223,10 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
       ICmpInst::isEquality(Pred)) {
     KnownBits XKnown = computeKnownBits(X, &Cmp);
     KnownBits YKnown = computeKnownBits(Y, &Cmp);
-    if (XKnown.countMaxPopulation() == 1 && YKnown.countMinPopulation() >= 2)
+    if (XKnown.countMaxPopulation() == 1 && YKnown.countMinPopulation() >= 2) {
+      KBOPT_LOG();
       return new ICmpInst(Pred, X, Cmp.getOperand(1));
+    }
   }
 
   // (icmp eq/ne (mul X Y)) -> (icmp eq/ne X/Y) if we know about whether X/Y are
@@ -1234,14 +1237,18 @@ Instruction *InstCombinerImpl::foldICmpWithZero(ICmpInst &Cmp) {
     KnownBits XKnown = computeKnownBits(X, &Cmp);
     // if X % 2 != 0
     //    (icmp eq/ne Y)
-    if (XKnown.countMaxTrailingZeros() == 0)
+    if (XKnown.countMaxTrailingZeros() == 0) {
+      KBOPT_LOG();
       return new ICmpInst(Pred, Y, Cmp.getOperand(1));
+    }
 
     KnownBits YKnown = computeKnownBits(Y, &Cmp);
     // if Y % 2 != 0
     //    (icmp eq/ne X)
-    if (YKnown.countMaxTrailingZeros() == 0)
+    if (YKnown.countMaxTrailingZeros() == 0) {
+      KBOPT_LOG();
       return new ICmpInst(Pred, X, Cmp.getOperand(1));
+    }
 
     auto *BO0 = cast<OverflowingBinaryOperator>(Cmp.getOperand(0));
     if (BO0->hasNoUnsignedWrap() || BO0->hasNoSignedWrap()) {
@@ -1505,6 +1512,7 @@ Instruction *InstCombinerImpl::foldICmpTruncConstant(ICmpInst &Cmp,
       // Pull in the high bits from known-ones set.
       APInt NewRHS = C.zext(SrcBits);
       NewRHS |= Known.One & APInt::getHighBitsSet(SrcBits, SrcBits - DstBits);
+      KBOPT_LOG();
       return new ICmpInst(Pred, X, ConstantInt::get(SrcTy, NewRHS));
     }
   }
@@ -1829,6 +1837,7 @@ Instruction *InstCombinerImpl::foldICmpAndConstConst(ICmpInst &Cmp,
     if (NewC2.isNegatedPowerOf2()) {
       Constant *NegBOC = ConstantInt::get(And->getType(), -NewC2);
       auto NewPred = isICMP_NE ? ICmpInst::ICMP_UGE : ICmpInst::ICMP_ULT;
+      KBOPT_LOG();
       return new ICmpInst(NewPred, X, NegBOC);
     }
   }
@@ -3779,6 +3788,7 @@ static Instruction *foldCtpopPow2Test(ICmpInst &I, IntrinsicInst *CtpopLhs,
     if (OpKnown.countMinPopulation() == 1) {
       Value *And = Builder.CreateAnd(
           Op, Constant::getIntegerValue(Op->getType(), ~(OpKnown.One)));
+      KBOPT_LOG();
       return new ICmpInst(
           (Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_ULT)
               ? ICmpInst::ICMP_EQ
@@ -4862,6 +4872,7 @@ foldShiftIntoShiftInAnotherHandOfAndInICmp(ICmpInst &I, const SimplifyQuery SQ,
                   ? Builder.CreateLShr(X, NewShAmt)
                   : Builder.CreateShl(X, NewShAmt);
   Value *T1 = Builder.CreateAnd(T0, Y);
+  KBOPT_LOG();
   return Builder.CreateICmp(I.getPredicate(), T1,
                             Constant::getNullValue(WidestTy));
 }
@@ -5014,23 +5025,29 @@ static Instruction *foldICmpAndXX(ICmpInst &I, const SimplifyQuery &Q,
 
   KnownBits KnownY = IC.computeKnownBits(A, &I);
   // (X & NegY) spred X --> (X & NegY) upred X
-  if (KnownY.isNegative())
+  if (KnownY.isNegative()) {
+    KBOPT_LOG();
     return new ICmpInst(ICmpInst::getUnsignedPredicate(Pred), Op0, Op1);
+  }
 
   if (Pred != ICmpInst::ICMP_SLE && Pred != ICmpInst::ICMP_SGT)
     return nullptr;
 
-  if (KnownY.isNonNegative())
+  if (KnownY.isNonNegative()) {
     // (X & PosY) s<= X --> X s>= 0
     // (X & PosY) s> X --> X s< 0
+    KBOPT_LOG();
     return new ICmpInst(ICmpInst::getSwappedPredicate(Pred), Op1,
                         Constant::getNullValue(Op1->getType()));
+  }
 
-  if (isKnownNegative(Op1, IC.getSimplifyQuery().getWithInstruction(&I)))
+  if (isKnownNegative(Op1, IC.getSimplifyQuery().getWithInstruction(&I))) {
+    KBOPT_LOG();
     // (NegX & Y) s<= NegX --> Y s< 0
     // (NegX & Y) s> NegX --> Y s>= 0
     return new ICmpInst(ICmpInst::getFlippedStrictnessPredicate(Pred), A,
                         Constant::getNullValue(A->getType()));
+  }
 
   return nullptr;
 }
@@ -5453,10 +5470,14 @@ Instruction *InstCombinerImpl::foldICmpBinOp(ICmpInst &I,
       if (ICmpInst::isSigned(Pred)) {
         if (Op0HasNSW && Op1HasNSW) {
           KnownBits ZKnown = computeKnownBits(Z, &I);
-          if (ZKnown.isStrictlyPositive())
+          if (ZKnown.isStrictlyPositive()) {
+            KBOPT_LOG();
             return new ICmpInst(Pred, X, Y);
-          if (ZKnown.isNegative())
+          }
+          if (ZKnown.isNegative()) {
+            KBOPT_LOG();
             return new ICmpInst(ICmpInst::getSwappedPredicate(Pred), X, Y);
+          }
           Value *LessThan = simplifyICmpInst(ICmpInst::ICMP_SLT, X, Y,
                                              SQ.getWithInstruction(&I));
           if (LessThan && match(LessThan, m_One()))
@@ -5478,20 +5499,26 @@ Instruction *InstCombinerImpl::foldICmpBinOp(ICmpInst &I,
           KnownBits ZKnown = computeKnownBits(Z, &I);
           // if Z % 2 != 0
           //    X * Z eq/ne Y * Z -> X eq/ne Y
-          if (ZKnown.countMaxTrailingZeros() == 0)
+          if (ZKnown.countMaxTrailingZeros() == 0) {
+            KBOPT_LOG();
             return new ICmpInst(Pred, X, Y);
+          }
           NonZero = !ZKnown.One.isZero() || isKnownNonZero(Z, Q);
           // if Z != 0 and nsw(X * Z) and nsw(Y * Z)
           //    X * Z eq/ne Y * Z -> X eq/ne Y
-          if (NonZero && BO0 && BO1 && Op0HasNSW && Op1HasNSW)
+          if (NonZero && BO0 && BO1 && Op0HasNSW && Op1HasNSW) {
+            KBOPT_LOG();
             return new ICmpInst(Pred, X, Y);
+          }
         } else
           NonZero = isKnownNonZero(Z, Q);
 
         // If Z != 0 and nuw(X * Z) and nuw(Y * Z)
         //    X * Z u{lt/le/gt/ge}/eq/ne Y * Z -> X u{lt/le/gt/ge}/eq/ne Y
-        if (NonZero && BO0 && BO1 && Op0HasNUW && Op1HasNUW)
+        if (NonZero && BO0 && BO1 && Op0HasNUW && Op1HasNUW) {
+          KBOPT_LOG();
           return new ICmpInst(Pred, X, Y);
+        }
       }
     }
   }

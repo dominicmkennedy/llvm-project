@@ -71,6 +71,7 @@
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyLibCalls.h"
+#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -624,6 +625,7 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   // instruction with a constant.
   if (PossibleZeros == DefiniteZeros) {
     auto *C = ConstantInt::get(Op0->getType(), DefiniteZeros);
+    KBOPT_LOG();
     return IC.replaceInstUsesWith(II, C);
   }
 
@@ -633,6 +635,7 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   if (!Known.One.isZero() ||
       isKnownNonZero(Op0, IC.getSimplifyQuery().getWithInstruction(&II))) {
     if (!match(II.getArgOperand(1), m_One()))
+      KBOPT_LOG();
       return IC.replaceOperand(II, 1, IC.Builder.getTrue());
   }
 
@@ -700,9 +703,11 @@ static Instruction *foldCtpop(IntrinsicInst &II, InstCombinerImpl &IC) {
   // ctpop (X & 32) --> (X & 32) >> 5
   // TODO: Investigate removing this as its likely unnecessary given the below
   // `isKnownToBeAPowerOfTwo` check.
-  if ((~Known.Zero).isPowerOf2())
+  if ((~Known.Zero).isPowerOf2()) {
+    KBOPT_LOG();
     return BinaryOperator::CreateLShr(
         Op0, ConstantInt::get(Ty, (~Known.Zero).exactLogBase2()));
+  }
 
   // More generally we can also handle non-constant power of 2 patterns such as
   // shl/shr(Pow2, X), (X & -X), etc... by transforming:
@@ -2036,8 +2041,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
             getKnownSignOrZero(IIOperand, SQ.getWithInstruction(II))) {
       // abs(x) -> x if x >= 0 (include abs(x-y) --> x - y where x >= y)
       // abs(x) -> x if x > 0 (include abs(x-y) --> x - y where x > y)
-      if (!*Known)
+      if (!*Known) {
+        KBOPT_LOG();
         return replaceInstUsesWith(*II, IIOperand);
+      }
 
       // abs(x) -> -x if x < 0
       // abs(x) -> -x if x < = 0 (include abs(x-y) --> y - x where x <= y)
@@ -2245,6 +2252,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
           // Negative power of 2 must be IntMin. It's possible to be able to
           // prove negative / power of 2 without actually having known bits, so
           // just get the value by hand.
+          KBOPT_LOG();
           X = Constant::getIntegerValue(
               Ty, APInt::getSignedMinValue(Ty->getScalarSizeInBits()));
         }
@@ -2406,7 +2414,8 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // bswap(x) -> shift(x) if x has exactly one "active byte"
     if (BW - LZ - TZ == 8) {
       assert(LZ != TZ && "active byte cannot be in the middle");
-      if (LZ > TZ)  // -> shl(x) if the "active byte" is in the low part of x
+      KBOPT_LOG();
+      if (LZ > TZ)   // -> shl(x) if the "active byte" is in the low part of x
         return BinaryOperator::CreateNUWShl(
             IIOperand, ConstantInt::get(IIOperand->getType(), LZ - TZ));
       // -> lshr(x) if the "active byte" is in the high part of x
@@ -3176,6 +3185,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
           signBitMustBeTheSame(Exp, InnerExp, SQ.getWithInstruction(II))) {
         // TODO: Add nsw/nuw probably safe if integer type exceeds exponent
         // width.
+        KBOPT_LOG();
         Value *NewExp = Builder.CreateAdd(InnerExp, Exp);
         II->setArgOperand(1, NewExp);
         II->setFastMathFlags(InnerFlags); // Or the inner flags.
@@ -3415,8 +3425,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
       uint64_t Mask1 = computeKnownBits(Mask, II).One.getZExtValue();
       // Check if every byte has common bits in Bytes and Mask.
       uint64_t C = Bytes1 & Mask1;
-      if ((C & 0xFF) && (C & 0xFF00) && (C & 0xFF0000) && (C & 0xFF000000))
+      if ((C & 0xFF) && (C & 0xFF00) && (C & 0xFF0000) && (C & 0xFF000000)) {
+        KBOPT_LOG();
         return replaceInstUsesWith(*II, Op0->getArgOperand(0));
+      }
     }
     break;
   }
@@ -3639,6 +3651,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
                                Value::MaxAlignmentExponent);
         if ((1ULL << TZ) < RK.ArgValue)
           continue;
+        KBOPT_LOG();
         return CallBase::removeOperandBundle(II, OBU.getTagID());
       }
     }
@@ -3735,8 +3748,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // then this one is redundant, and should be removed.
     KnownBits Known(1);
     computeKnownBits(IIOperand, Known, II);
-    if (Known.isAllOnes() && isAssumeWithEmptyBundle(cast<AssumeInst>(*II)))
+    if (Known.isAllOnes() && isAssumeWithEmptyBundle(cast<AssumeInst>(*II))) {
+      KBOPT_LOG();
       return eraseInstFromFunction(*II);
+    }
 
     // assume(false) is unreachable.
     if (match(IIOperand, m_CombineOr(m_Zero(), m_Undef()))) {

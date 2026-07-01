@@ -15,6 +15,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 using namespace llvm;
 using namespace PatternMatch;
 
@@ -993,12 +994,14 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
     // shr (shl X, Y), Y
     if (match(I.getOperand(0), m_Shl(m_Value(), m_Specific(I.getOperand(1))))) {
       I.setIsExact();
+      KBOPT_LOG();
       return true;
     }
     // Infer 'exact' flag if shift amount is cttz(x) on the same operand.
     if (match(I.getOperand(1), m_Intrinsic<Intrinsic::cttz>(
                                    m_Specific(I.getOperand(0)), m_Value()))) {
       I.setIsExact();
+      KBOPT_LOG();
       return true;
     }
   }
@@ -1028,6 +1031,9 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
         Changed = true;
       }
     }
+    if (Changed) {
+          KBOPT_LOG();
+    }
     return Changed;
   }
 
@@ -1036,6 +1042,9 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
   Changed = MaxCnt <= KnownAmt.countMinTrailingZeros();
   I.setIsExact(Changed);
 
+  if (Changed) {
+    KBOPT_LOG();
+  }
   return Changed;
 }
 
@@ -1314,8 +1323,10 @@ Instruction *InstCombinerImpl::visitLShr(BinaryOperator &I) {
   // Fold (X + Y) / 2 --> (X & Y) iff (X u<= 1) && (Y u<= 1)
   if (match(Op0, m_Add(m_Value(X), m_Value(Y))) && match(Op1, m_One()) &&
       computeKnownBits(X, &I).countMaxActiveBits() <= 1 &&
-      computeKnownBits(Y, &I).countMaxActiveBits() <= 1)
+      computeKnownBits(Y, &I).countMaxActiveBits() <= 1) {
+    KBOPT_LOG();
     return BinaryOperator::CreateAnd(X, Y);
+  }
 
   // (sub nuw X, (Y << nuw Z)) >>u exact Z --> (X >>u exact Z) sub nuw Y
   if (I.isExact() &&

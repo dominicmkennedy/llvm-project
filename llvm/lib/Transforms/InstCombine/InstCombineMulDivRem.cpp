@@ -33,6 +33,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 
 #define DEBUG_TYPE "instcombine"
@@ -1854,6 +1855,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
       (match(Op1, m_Power2(Op1C)) || match(Op1, m_NegatedPower2(Op1C))) &&
       KnownDividend.countMinTrailingZeros() >= Op1C->countr_zero()) {
     I.setIsExact();
+    KBOPT_LOG();
     return &I;
   }
 

@@ -99,6 +99,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -4441,6 +4442,7 @@ Instruction *InstCombinerImpl::visitSwitchInst(SwitchInst &SI) {
       APInt TruncatedCase = Case.getCaseValue()->getValue().trunc(NewWidth);
       Case.setValue(ConstantInt::get(SI.getContext(), TruncatedCase));
     }
+    KBOPT_LOG();
     return replaceOperand(SI, 0, NewCond);
   }
 

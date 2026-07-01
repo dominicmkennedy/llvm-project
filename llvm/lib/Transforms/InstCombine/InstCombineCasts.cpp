@@ -26,6 +26,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 #include <iterator>
 #include <optional>
 
@@ -991,6 +992,7 @@ Instruction *InstCombinerImpl::visitTrunc(TruncInst &Trunc) {
                << Trunc << '\n');
     Value *Res = EvaluateInDifferentType(Src, DestTy, false);
     assert(Res->getType() == DestTy);
+    KBOPT_LOG();
     return replaceInstUsesWith(Trunc, Res);
   }
 
@@ -1266,6 +1268,8 @@ Instruction *InstCombinerImpl::transformZExtICmp(ICmpInst *Cmp,
         if (Cmp->getPredicate() == ICmpInst::ICMP_EQ)
           In = Builder.CreateXor(In, ConstantInt::get(In->getType(), 1));
 
+        KBOPT_LOG();
+        
         if (Zext.getType() == In->getType())
           return replaceInstUsesWith(Zext, In);
 
@@ -1635,6 +1639,7 @@ Instruction *InstCombinerImpl::transformSExtICmp(ICmpInst *Cmp,
           Value *V = Pred == ICmpInst::ICMP_NE ?
                        ConstantInt::getAllOnesValue(Sext.getType()) :
                        ConstantInt::getNullValue(Sext.getType());
+          KBOPT_LOG();
           return replaceInstUsesWith(Sext, V);
         }
 
@@ -1666,6 +1671,8 @@ Instruction *InstCombinerImpl::transformSExtICmp(ICmpInst *Cmp,
                                   KnownZeroMask.getBitWidth() - 1), "sext");
         }
 
+        KBOPT_LOG();
+        
         if (Sext.getType() == In->getType())
           return replaceInstUsesWith(Sext, In);
         return CastInst::CreateIntegerCast(In, Sext.getType(), true/*SExt*/);
