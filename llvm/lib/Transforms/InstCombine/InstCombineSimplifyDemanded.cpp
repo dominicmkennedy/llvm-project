@@ -116,6 +116,7 @@ static Value *simplifyShiftSelectingPackedElement(Instruction *I,
   Value *Select = IC.Builder.CreateSelectWithUnknownProfile(ShrAmtZ, Lower,
                                                             Upper, DEBUG_TYPE);
   Select->takeName(I);
+  KBOPT_LOG();
   return Select;
 }
 
@@ -1117,6 +1118,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
           if (DemandedMaskLHS.isSubsetOf(LHSKnown.Zero | LHSKnown.One) &&
               !match(I->getOperand(0), m_SpecificInt(LHSKnown.One))) {
             replaceOperand(*I, 0, Constant::getIntegerValue(VTy, LHSKnown.One));
+            KBOPT_LOG();
             return I;
           }
 
@@ -1124,6 +1126,7 @@ Value *InstCombinerImpl::SimplifyDemandedUseBits(Instruction *I,
           if (DemandedMaskRHS.isSubsetOf(RHSKnown.Zero | RHSKnown.One) &&
               !match(I->getOperand(1), m_SpecificInt(RHSKnown.One))) {
             replaceOperand(*I, 1, Constant::getIntegerValue(VTy, RHSKnown.One));
+            KBOPT_LOG();
             return I;
           }
         }
@@ -1227,15 +1230,21 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
 
     // If the client is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(ITy, Known.One);
+    }
 
     // If all of the demanded bits are known 1 on one side, return the other.
     // These bits cannot contribute to the result of the 'and' in this context.
-    if (DemandedMask.isSubsetOf(LHSKnown.Zero | RHSKnown.One))
+    if (DemandedMask.isSubsetOf(LHSKnown.Zero | RHSKnown.One)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedMask.isSubsetOf(RHSKnown.Zero | LHSKnown.One))
+    }
+    if (DemandedMask.isSubsetOf(RHSKnown.Zero | LHSKnown.One)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     break;
   }
@@ -1248,17 +1257,23 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
 
     // If the client is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(ITy, Known.One);
+    }
 
     // We can simplify (X|Y) -> X or Y in the user's context if we know that
     // only bits from X or Y are demanded.
     // If all of the demanded bits are known zero on one side, return the other.
     // These bits cannot contribute to the result of the 'or' in this context.
-    if (DemandedMask.isSubsetOf(LHSKnown.One | RHSKnown.Zero))
+    if (DemandedMask.isSubsetOf(LHSKnown.One | RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedMask.isSubsetOf(RHSKnown.One | LHSKnown.Zero))
+    }
+    if (DemandedMask.isSubsetOf(RHSKnown.One | LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     break;
   }
@@ -1271,16 +1286,22 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
 
     // If the client is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(ITy, Known.One);
+    }
 
     // We can simplify (X^Y) -> X or Y in the user's context if we know that
     // only bits from X or Y are demanded.
     // If all of the demanded bits are known zero on one side, return the other.
-    if (DemandedMask.isSubsetOf(RHSKnown.Zero))
+    if (DemandedMask.isSubsetOf(RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
-    if (DemandedMask.isSubsetOf(LHSKnown.Zero))
+    }
+    if (DemandedMask.isSubsetOf(LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     break;
   }
@@ -1291,12 +1312,16 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
     // If an operand adds zeros to every bit below the highest demanded bit,
     // that operand doesn't change the result. Return the other side.
     llvm::computeKnownBits(I->getOperand(1), RHSKnown, Q, Depth + 1);
-    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero))
+    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
+    }
 
     llvm::computeKnownBits(I->getOperand(0), LHSKnown, Q, Depth + 1);
-    if (DemandedFromOps.isSubsetOf(LHSKnown.Zero))
+    if (DemandedFromOps.isSubsetOf(LHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(1);
+    }
 
     bool NSW = cast<OverflowingBinaryOperator>(I)->hasNoSignedWrap();
     bool NUW = cast<OverflowingBinaryOperator>(I)->hasNoUnsignedWrap();
@@ -1311,8 +1336,10 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
     // If an operand subtracts zeros from every bit below the highest demanded
     // bit, that operand doesn't change the result. Return the other side.
     llvm::computeKnownBits(I->getOperand(1), RHSKnown, Q, Depth + 1);
-    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero))
+    if (DemandedFromOps.isSubsetOf(RHSKnown.Zero)) {
+      KBOPT_LOG();
       return I->getOperand(0);
+    }
 
     bool NSW = cast<OverflowingBinaryOperator>(I)->hasNoSignedWrap();
     bool NUW = cast<OverflowingBinaryOperator>(I)->hasNoUnsignedWrap();
@@ -1327,8 +1354,10 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
 
     // If this user is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero | Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero | Known.One)) {
+      KBOPT_LOG();      
       return Constant::getIntegerValue(ITy, Known.One);
+    }
 
     // If the right shift operand 0 is a result of a left shift by the same
     // amount, this is probably a zero/sign extension, which may be unnecessary,
@@ -1354,8 +1383,10 @@ Value *InstCombinerImpl::SimplifyMultipleUseDemandedBits(
 
     // If this user is only demanding bits that we know, return the known
     // constant.
-    if (DemandedMask.isSubsetOf(Known.Zero|Known.One))
+    if (DemandedMask.isSubsetOf(Known.Zero|Known.One)) {
+      KBOPT_LOG();
       return Constant::getIntegerValue(ITy, Known.One);
+    }
 
     break;
   }
