@@ -1775,6 +1775,14 @@ ALWAYS_ENABLED_STATISTIC(
     TotalVanillaKnownBitsTopLevel,
     "Total known bits discovered across pattern-disabled computeKnownBits "
     "queries at depth 0");
+ALWAYS_ENABLED_STATISTIC(
+    TotalVanillaKnownBitsTopLevelInt,
+    "Total known bits discovered across pattern-disabled computeKnownBits "
+    "queries at depth 0 for integer scalar/vector values");
+ALWAYS_ENABLED_STATISTIC(
+    TotalVanillaKnownBitsTopLevelIntNonConstant,
+    "Total known bits discovered across pattern-disabled computeKnownBits "
+    "queries at depth 0 for non-constant integer scalar/vector values");
 ALWAYS_ENABLED_STATISTIC(NumKBPatternMatches,
                          "Number of computePatternKB calls with at least one pattern match");
 ALWAYS_ENABLED_STATISTIC(
@@ -1872,6 +1880,14 @@ ALWAYS_ENABLED_STATISTIC(
     PatternUCRVanillaPrecisionBitsTopLevel,
     "Total top-level unsigned CR precision bits with patterns disabled");
 ALWAYS_ENABLED_STATISTIC(
+    PatternSCRVanillaPrecisionBitsTopLevelNonConstant,
+    "Total top-level signed CR precision bits with patterns disabled, excluding "
+    "direct constant queries");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRVanillaPrecisionBitsTopLevelNonConstant,
+    "Total top-level unsigned CR precision bits with patterns disabled, "
+    "excluding direct constant queries");
+ALWAYS_ENABLED_STATISTIC(
     PatternSCRFinalPrecisionBitsTopLevel,
     "Total top-level signed CR precision bits with patterns enabled");
 ALWAYS_ENABLED_STATISTIC(
@@ -1915,6 +1931,17 @@ static uint64_t getRelativeReductionPerThousand(uint64_t Reduction,
   if (!Reduction || !FullSize)
     return 0;
   return (Reduction * 1000) / FullSize;
+}
+
+static bool isKnownBitsIntegerQuery(const Value *V) {
+  return V->getType()->isIntOrIntVectorTy();
+}
+
+static bool isDirectKnownBitsConstantQuery(const Value *V) {
+  const APInt *C;
+  return match(V, m_APInt(C)) || isa<ConstantPointerNull>(V) ||
+         isa<ConstantAggregateZero>(V) || isa<ConstantDataVector>(V) ||
+         isa<ConstantVector>(V);
 }
 
 static void computeKnownBitsFromOperator(const Operator *I,
@@ -2971,9 +2998,17 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
         PatternKBRelativeReducedTopLevel +=
             getRelativeReductionPerThousand(BitsAdded, Known.getBitWidth());
       }
-      if (PatternFreePopcount >= 0)
+      if (PatternFreePopcount >= 0) {
         TotalVanillaKnownBitsTopLevel +=
             static_cast<unsigned>(PatternFreePopcount);
+        if (isKnownBitsIntegerQuery(V)) {
+          TotalVanillaKnownBitsTopLevelInt +=
+              static_cast<unsigned>(PatternFreePopcount);
+          if (!isDirectKnownBitsConstantQuery(V))
+            TotalVanillaKnownBitsTopLevelIntNonConstant +=
+                static_cast<unsigned>(PatternFreePopcount);
+        }
+      }
     }
   });
 
@@ -11101,13 +11136,17 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
   if (PatternFreeCR) {
     uint64_t PrecisionBitsAdded = 0;
     uint64_t RelativeReduced = 0;
+    unsigned PatternFreePrecisionBits =
+        getConstantRangePrecisionBits(*PatternFreeCR);
     recordConstantRangeReduction(*PatternFreeCR, CR, PrecisionBitsAdded,
                                  RelativeReduced);
     if (ForSigned) {
       if (CR != *PatternFreeCR)
         ++NumPatternSCRImprovedQueriesTopLevel;
-      PatternSCRVanillaPrecisionBitsTopLevel +=
-          getConstantRangePrecisionBits(*PatternFreeCR);
+      PatternSCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
+      if (!isa<Constant>(V))
+        PatternSCRVanillaPrecisionBitsTopLevelNonConstant +=
+            PatternFreePrecisionBits;
       PatternSCRFinalPrecisionBitsTopLevel +=
           getConstantRangePrecisionBits(CR);
       PatternSCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
@@ -11115,8 +11154,10 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
     } else {
       if (CR != *PatternFreeCR)
         ++NumPatternUCRImprovedQueriesTopLevel;
-      PatternUCRVanillaPrecisionBitsTopLevel +=
-          getConstantRangePrecisionBits(*PatternFreeCR);
+      PatternUCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
+      if (!isa<Constant>(V))
+        PatternUCRVanillaPrecisionBitsTopLevelNonConstant +=
+            PatternFreePrecisionBits;
       PatternUCRFinalPrecisionBitsTopLevel +=
           getConstantRangePrecisionBits(CR);
       PatternUCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
