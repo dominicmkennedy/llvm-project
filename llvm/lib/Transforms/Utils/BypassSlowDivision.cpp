@@ -31,6 +31,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 #include <cstdint>
 
@@ -370,6 +371,7 @@ std::optional<QuotRemPair> FastDivInsertionTask::insertFastDivAndRem() {
     // flow in this case, narrowing the division is always a win, even if the
     // divisor is a constant (and will later get replaced by a multiplication).
 
+    KBOPT_LOG();
     IRBuilder<> Builder(SlowDivOrRem);
     Value *TruncDividend = Builder.CreateTrunc(Dividend, BypassType);
     Value *TruncDivisor = Builder.CreateTrunc(Divisor, BypassType);

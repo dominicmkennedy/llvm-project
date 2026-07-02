@@ -33,6 +33,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
+#include "llvm/Support/KBOptLog.h"
 #include <cassert>
 
 #define DEBUG_TYPE "instcombine"
@@ -93,6 +94,8 @@ static Value *simplifyValueKnownNonZero(Value *V, InstCombinerImpl &IC,
   //    If V is a phi node, we can call this on each of its operands.
   //    "select cond, X, 0" can simplify to "X".
 
+  if (MadeChange)
+    KBOPT_LOG();
   return MadeChange ? V : nullptr;
 }
 
@@ -1739,12 +1742,14 @@ Instruction *InstCombinerImpl::visitUDiv(BinaryOperator &I) {
       return Log2;
 
     // Op0 udiv Op1 -> Op0 lshr cttz(Op1), if Op1 is a power of 2.
-    if (isKnownToBeAPowerOfTwo(Denom, /*OrZero=*/true, &I))
+    if (isKnownToBeAPowerOfTwo(Denom, /*OrZero=*/true, &I)) {
       // This will increase instruction count but it's okay
       // since bitwise operations are substantially faster than
       // division.
+      KBOPT_LOG();
       return Builder.CreateBinaryIntrinsic(Intrinsic::cttz, Denom,
                                            Builder.getTrue());
+    }
 
     return nullptr;
   };
@@ -1854,12 +1859,14 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
       (match(Op1, m_Power2(Op1C)) || match(Op1, m_NegatedPower2(Op1C))) &&
       KnownDividend.countMinTrailingZeros() >= Op1C->countr_zero()) {
     I.setIsExact();
+    KBOPT_LOG();
     return &I;
   }
 
   if (KnownDividend.isNonNegative()) {
     // If both operands are unsigned, turn this into a udiv.
     if (isKnownNonNegative(Op1, SQ.getWithInstruction(&I))) {
+      KBOPT_LOG();
       auto *BO = BinaryOperator::CreateUDiv(Op0, Op1, I.getName());
       BO->setIsExact(I.isExact());
       return BO;
@@ -1868,6 +1875,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
     if (match(Op1, m_NegatedPower2())) {
       // X sdiv (-(1 << C)) -> -(X sdiv (1 << C)) ->
       //                    -> -(X udiv (1 << C)) -> -(X u>> C)
+      KBOPT_LOG();
       Constant *CNegLog2 = ConstantExpr::getExactLogBase2(
           ConstantExpr::getNeg(cast<Constant>(Op1)));
       Value *Shr = Builder.CreateLShr(Op0, CNegLog2, I.getName(), I.isExact());
@@ -1879,6 +1887,7 @@ Instruction *InstCombinerImpl::visitSDiv(BinaryOperator &I) {
       // Safe because the only negative value (1 << Y) can take on is
       // INT_MIN, and X sdiv INT_MIN == X udiv INT_MIN == 0 if X doesn't have
       // the sign bit set.
+      KBOPT_LOG();
       auto *BO = BinaryOperator::CreateUDiv(Op0, Op1, I.getName());
       BO->setIsExact(I.isExact());
       return BO;
@@ -2431,6 +2440,7 @@ Instruction *InstCombinerImpl::visitURem(BinaryOperator &I) {
   if (isKnownToBeAPowerOfTwo(Op1, /*OrZero*/ true, &I)) {
     // This may increase instruction count, we don't enforce that Y is a
     // constant.
+    KBOPT_LOG();
     Constant *N1 = Constant::getAllOnesValue(Ty);
     Value *Add = Builder.CreateAdd(Op1, N1);
     return BinaryOperator::CreateAnd(Op0, Add);

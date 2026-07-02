@@ -1583,11 +1583,15 @@ static Value *simplifyUnsignedRangeCheck(ICmpInst *ZeroICmp,
     if (match(UnsignedICmp,
               m_c_ICmp(UnsignedPred, m_Specific(Y), m_Specific(A)))) {
       if (UnsignedPred == ICmpInst::ICMP_UGE && IsAnd &&
-          EqPred == ICmpInst::ICMP_NE && isKnownNonZero(B, Q))
+          EqPred == ICmpInst::ICMP_NE && isKnownNonZero(B, Q)) {
+        KBOPT_LOG();
         return UnsignedICmp;
+      }
       if (UnsignedPred == ICmpInst::ICMP_ULT && !IsAnd &&
-          EqPred == ICmpInst::ICMP_EQ && isKnownNonZero(B, Q))
+          EqPred == ICmpInst::ICMP_EQ && isKnownNonZero(B, Q)) {
+        KBOPT_LOG();
         return UnsignedICmp;
+      }
     }
   }
 
@@ -1604,14 +1608,18 @@ static Value *simplifyUnsignedRangeCheck(ICmpInst *ZeroICmp,
   // X > Y && Y == 0  -->  Y == 0  iff X != 0
   // X > Y || Y == 0  -->  X > Y   iff X != 0
   if (UnsignedPred == ICmpInst::ICMP_UGT && EqPred == ICmpInst::ICMP_EQ &&
-      isKnownNonZero(X, Q))
+      isKnownNonZero(X, Q)) {
+    KBOPT_LOG();
     return IsAnd ? ZeroICmp : UnsignedICmp;
+  }
 
   // X <= Y && Y != 0  -->  X <= Y  iff X != 0
   // X <= Y || Y != 0  -->  Y != 0  iff X != 0
   if (UnsignedPred == ICmpInst::ICMP_ULE && EqPred == ICmpInst::ICMP_NE &&
-      isKnownNonZero(X, Q))
+      isKnownNonZero(X, Q)) {
+    KBOPT_LOG();
     return IsAnd ? UnsignedICmp : ZeroICmp;
+  }
 
   // The transforms below here are expected to be handled more generally with
   // simplifyAndOrOfICmpsWithLimitConst() or in InstCombine's
@@ -2885,9 +2893,11 @@ static Constant *computePointerICmp(CmpPredicate Pred, Value *LHS, Value *RHS,
       };
       CustomCaptureTracker Tracker;
       PointerMayBeCaptured(MI, &Tracker);
-      if (!Tracker.Captured)
+      if (!Tracker.Captured) {
+        KBOPT_LOG();
         return ConstantInt::get(getCompareTy(LHS),
                                 CmpInst::isFalseWhenEqual(Pred));
+      }
     }
   }
 
@@ -3014,13 +3024,17 @@ static Value *simplifyICmpWithZero(CmpPredicate Pred, Value *LHS, Value *RHS,
     return getTrue(ITy);
   case ICmpInst::ICMP_EQ:
   case ICmpInst::ICMP_ULE:
-    if (isKnownNonZero(LHS, Q))
+    if (isKnownNonZero(LHS, Q)) {
+      KBOPT_LOG();
       return getFalse(ITy);
+    }
     break;
   case ICmpInst::ICMP_NE:
   case ICmpInst::ICMP_UGT:
-    if (isKnownNonZero(LHS, Q))
+    if (isKnownNonZero(LHS, Q)) {
+      KBOPT_LOG();
       return getTrue(ITy);
+    }
     break;
   case ICmpInst::ICMP_SLT: {
     KnownBits LHSKnown = computeKnownBits(LHS, Q);
@@ -3120,8 +3134,10 @@ static Value *simplifyICmpWithConstant(CmpPredicate Pred, Value *LHS,
         *MulC != 0 && C->srem(*MulC) != 0)))
     return ConstantInt::get(ITy, Pred == ICmpInst::ICMP_NE);
 
-  if (Pred == ICmpInst::ICMP_UGE && C->isOne() && isKnownNonZero(LHS, Q))
+  if (Pred == ICmpInst::ICMP_UGE && C->isOne() && isKnownNonZero(LHS, Q)) {
+    KBOPT_LOG();
     return ConstantInt::getTrue(ITy);
+  }
 
   return nullptr;
 }
@@ -3223,6 +3239,7 @@ static Value *simplifyICmpWithBinOpOnLHS(CmpPredicate Pred, BinaryOperator *LBO,
 
   // icmp pred (urem X, Y), Y
   if (match(LBO, m_URem(m_Value(), m_Specific(RHS)))) {
+    bool KnownBitsConstrained = false;
     switch (Pred) {
     default:
       break;
@@ -3231,24 +3248,28 @@ static Value *simplifyICmpWithBinOpOnLHS(CmpPredicate Pred, BinaryOperator *LBO,
       KnownBits Known = computeKnownBits(RHS, Q);
       if (!Known.isNonNegative())
         break;
+      KnownBitsConstrained = true;
       [[fallthrough]];
     }
     case ICmpInst::ICMP_EQ:
     case ICmpInst::ICMP_UGT:
     case ICmpInst::ICMP_UGE:
-      KBOPT_LOG();
+      if (KnownBitsConstrained)
+        KBOPT_LOG();
       return getFalse(ITy);
     case ICmpInst::ICMP_SLT:
     case ICmpInst::ICMP_SLE: {
       KnownBits Known = computeKnownBits(RHS, Q);
       if (!Known.isNonNegative())
         break;
+      KnownBitsConstrained = true;
       [[fallthrough]];
     }
     case ICmpInst::ICMP_NE:
     case ICmpInst::ICMP_ULT:
     case ICmpInst::ICMP_ULE:
-      KBOPT_LOG();
+      if (KnownBitsConstrained)
+        KBOPT_LOG();
       return getTrue(ITy);
     }
   }
@@ -3273,10 +3294,12 @@ static Value *simplifyICmpWithBinOpOnLHS(CmpPredicate Pred, BinaryOperator *LBO,
       case ICmpInst::ICMP_EQ:
       case ICmpInst::ICMP_UGE:
       case ICmpInst::ICMP_UGT:
+        KBOPT_LOG();
         return getFalse(ITy);
       case ICmpInst::ICMP_NE:
       case ICmpInst::ICMP_ULT:
       case ICmpInst::ICMP_ULE:
+        KBOPT_LOG();
         return getTrue(ITy);
       }
     }
@@ -3500,8 +3523,10 @@ static Value *simplifyICmpWithBinOp(CmpPredicate Pred, Value *LHS, Value *RHS,
           !isKnownNonZero(LBO->getOperand(0), Q))
         break;
       if (Value *V = simplifyICmpInst(Pred, LBO->getOperand(1),
-                                      RBO->getOperand(1), Q, MaxRecurse - 1))
+                                      RBO->getOperand(1), Q, MaxRecurse - 1)) {
+        KBOPT_LOG();
         return V;
+      }
       break;
     }
     // If C1 & C2 == C1, A = X and/or C1, B = X and/or C2:
@@ -4207,12 +4232,18 @@ static Value *simplifyFCmpInst(CmpPredicate Pred, Value *LHS, Value *RHS,
     KnownFPClass RHSClass = computeKnownFPClass(RHS, fcAllFlags, Q);
     KnownFPClass LHSClass = computeKnownFPClass(LHS, fcAllFlags, Q);
 
-    if (FMF.noNaNs() ||
-        (RHSClass.isKnownNeverNaN() && LHSClass.isKnownNeverNaN()))
+    bool KnownNeverNaNBoth =
+        RHSClass.isKnownNeverNaN() && LHSClass.isKnownNeverNaN();
+    if (FMF.noNaNs() || KnownNeverNaNBoth) {
+      if (KnownNeverNaNBoth)
+        KBOPT_LOG();
       return ConstantInt::get(RetTy, Pred == FCmpInst::FCMP_ORD);
+    }
 
-    if (RHSClass.isKnownAlwaysNaN() || LHSClass.isKnownAlwaysNaN())
+    if (RHSClass.isKnownAlwaysNaN() || LHSClass.isKnownAlwaysNaN()) {
+      KBOPT_LOG();
       return ConstantInt::get(RetTy, Pred == CmpInst::FCMP_UNO);
+    }
   }
 
   if (std::optional<bool> Res =
@@ -4242,10 +4273,14 @@ static Value *simplifyFCmpInst(CmpPredicate Pred, Value *LHS, Value *RHS,
     auto [ClassVal, ClassTest] = fcmpToClassTest(Pred, *ParentF, LHS, C);
     if (ClassVal) {
       FullKnownClassLHS = computeLHSClass();
-      if ((FullKnownClassLHS->KnownFPClasses & ClassTest) == fcNone)
+      if ((FullKnownClassLHS->KnownFPClasses & ClassTest) == fcNone) {
+        KBOPT_LOG();
         return getFalse(RetTy);
-      if ((FullKnownClassLHS->KnownFPClasses & ~ClassTest) == fcNone)
+      }
+      if ((FullKnownClassLHS->KnownFPClasses & ~ClassTest) == fcNone) {
+        KBOPT_LOG();
         return getTrue(RetTy);
+      }
     }
   }
 
@@ -4271,8 +4306,10 @@ static Value *simplifyFCmpInst(CmpPredicate Pred, Value *LHS, Value *RHS,
         KnownFPClass KnownClass = computeLHSClass(Interested);
 
         // (X >= 0) implies (X > C) when (C < 0)
-        if (KnownClass.cannotBeOrderedLessThanZero())
+        if (KnownClass.cannotBeOrderedLessThanZero()) {
+          KBOPT_LOG();
           return getTrue(RetTy);
+        }
         break;
       }
       case FCmpInst::FCMP_OEQ:
@@ -4281,8 +4318,10 @@ static Value *simplifyFCmpInst(CmpPredicate Pred, Value *LHS, Value *RHS,
         KnownFPClass KnownClass = computeLHSClass(Interested);
 
         // (X >= 0) implies !(X < C) when (C < 0)
-        if (KnownClass.cannotBeOrderedLessThanZero())
+        if (KnownClass.cannotBeOrderedLessThanZero()) {
+          KBOPT_LOG();
           return getFalse(RetTy);
+        }
         break;
       }
       default:
@@ -4350,8 +4389,10 @@ static Value *simplifyFCmpInst(CmpPredicate Pred, Value *LHS, Value *RHS,
       // Positive or zero X >= 0.0 --> true
       // Positive or zero X <  0.0 --> false
       if ((FMF.noNaNs() || Known.isKnownNeverNaN()) &&
-          Known.cannotBeOrderedLessThanZero())
+          Known.cannotBeOrderedLessThanZero()) {
+        KBOPT_LOG();
         return Pred == FCmpInst::FCMP_OGE ? getTrue(RetTy) : getFalse(RetTy);
+      }
       break;
     }
     case FCmpInst::FCMP_UGE:
@@ -4361,8 +4402,10 @@ static Value *simplifyFCmpInst(CmpPredicate Pred, Value *LHS, Value *RHS,
 
       // Positive or zero or nan X >= 0.0 --> true
       // Positive or zero or nan X <  0.0 --> false
-      if (Known.cannotBeOrderedLessThanZero())
+      if (Known.cannotBeOrderedLessThanZero()) {
+        KBOPT_LOG();
         return Pred == FCmpInst::FCMP_UGE ? getTrue(RetTy) : getFalse(RetTy);
+      }
       break;
     }
     default:
@@ -6053,14 +6096,20 @@ static Value *simplifyFMAFMul(Value *Op0, Value *Op1, FastMathFlags FMF,
     KnownFPClass Known = computeKnownFPClass(Op0, FMF, fcInf | fcNan, Q);
     if (Known.isKnownNever(fcInf | fcNan)) {
       // if nsz is set, return 0.0
-      if (FMF.noSignedZeros())
+      if (FMF.noSignedZeros()) {
+        KBOPT_LOG();
         return ConstantFP::getZero(Op0->getType());
+      }
       // +normal number * (-)0.0 --> (-)0.0
-      if (Known.SignBit == false)
+      if (Known.SignBit == false) {
+        KBOPT_LOG();
         return Op1;
+      }
       // -normal number * (-)0.0 --> -(-)0.0
-      if (Known.SignBit == true)
+      if (Known.SignBit == true) {
+        KBOPT_LOG();
         return foldConstant(Instruction::FNeg, Op1, Q);
+      }
     }
   }
 

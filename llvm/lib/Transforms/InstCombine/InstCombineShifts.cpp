@@ -15,6 +15,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 using namespace llvm;
 using namespace PatternMatch;
 
@@ -1014,16 +1015,29 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
   bool Changed = false;
 
   if (I.getOpcode() == Instruction::Shl) {
+    bool LoggedKnownBitsChange = false;
+    auto LogKnownBitsChange = [&]() {
+      if (!LoggedKnownBitsChange) {
+        KBOPT_LOG();
+        LoggedKnownBitsChange = true;
+      }
+    };
+
     // If we have as many leading zeros than maximum shift cnt we have nuw.
     if (!I.hasNoUnsignedWrap() && MaxCnt <= KnownAmt.countMinLeadingZeros()) {
       I.setHasNoUnsignedWrap();
       Changed = true;
+      LogKnownBitsChange();
     }
     // If we have more sign bits than maximum shift cnt we have nsw.
     if (!I.hasNoSignedWrap()) {
-      if (MaxCnt < KnownAmt.countMinSignBits() ||
-          MaxCnt <
-              ComputeNumSignBits(I.getOperand(0), Q.DL, Q.AC, Q.CxtI, Q.DT)) {
+      bool NSWByKnownBits = MaxCnt < KnownAmt.countMinSignBits();
+      if (NSWByKnownBits) {
+        I.setHasNoSignedWrap();
+        Changed = true;
+        LogKnownBitsChange();
+      } else if (MaxCnt < ComputeNumSignBits(I.getOperand(0), Q.DL, Q.AC,
+                                             Q.CxtI, Q.DT)) {
         I.setHasNoSignedWrap();
         Changed = true;
       }
@@ -1036,6 +1050,9 @@ static bool setShiftFlags(BinaryOperator &I, const SimplifyQuery &Q) {
   Changed = MaxCnt <= KnownAmt.countMinTrailingZeros();
   I.setIsExact(Changed);
 
+  if (Changed) {
+    KBOPT_LOG();
+  }
   return Changed;
 }
 
@@ -1314,8 +1331,10 @@ Instruction *InstCombinerImpl::visitLShr(BinaryOperator &I) {
   // Fold (X + Y) / 2 --> (X & Y) iff (X u<= 1) && (Y u<= 1)
   if (match(Op0, m_Add(m_Value(X), m_Value(Y))) && match(Op1, m_One()) &&
       computeKnownBits(X, &I).countMaxActiveBits() <= 1 &&
-      computeKnownBits(Y, &I).countMaxActiveBits() <= 1)
+      computeKnownBits(Y, &I).countMaxActiveBits() <= 1) {
+    KBOPT_LOG();
     return BinaryOperator::CreateAnd(X, Y);
+  }
 
   // (sub nuw X, (Y << nuw Z)) >>u exact Z --> (X >>u exact Z) sub nuw Y
   if (I.isExact() &&

@@ -1013,8 +1013,10 @@ Instruction *InstCombinerImpl::foldAddWithConstant(BinaryOperator &Add) {
   if (C->isOne()) {
     if (match(Op0, m_ZExt(m_Add(m_Value(X), m_AllOnes())))) {
       const SimplifyQuery Q = SQ.getWithInstruction(&Add);
-      if (llvm::isKnownNonZero(X, Q))
+      if (llvm::isKnownNonZero(X, Q)) {
+        KBOPT_LOG();
         return new ZExtInst(X, Ty);
+      }
     }
   }
 
@@ -2536,9 +2538,10 @@ Instruction *InstCombinerImpl::visitSub(BinaryOperator &I) {
       // transform is easier to reverse if necessary.
       KnownBits RHSKnown = llvm::computeKnownBits(
           Op1, SQ.getWithInstruction(&I).getWithoutDomCondCache());
-      if ((*Op0C | RHSKnown.Zero).isAllOnes())
+      if ((*Op0C | RHSKnown.Zero).isAllOnes()) {
         KBOPT_LOG();
         return BinaryOperator::CreateXor(Op1, Op0);
+      }
     }
 
     // C - ((C3 -nuw X) & C2) --> (C - (C2 & C3)) + (X & C2) when:

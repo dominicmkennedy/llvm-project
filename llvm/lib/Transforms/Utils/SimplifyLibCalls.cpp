@@ -39,6 +39,7 @@
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
+#include "llvm/Support/KBOptLog.h"
 
 #include <cmath>
 
@@ -330,6 +331,7 @@ static void annotateNonNullAndDereferenceable(CallInst *CI, ArrayRef<unsigned> A
     annotateNonNullNoUndefBasedOnAccess(CI, ArgNos);
     annotateDereferenceableBytes(CI, ArgNos, LenC->getZExtValue());
   } else if (isKnownNonZero(Size, DL)) {
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, ArgNos);
     uint64_t X, Y;
     uint64_t DerefMin = 1;
@@ -423,8 +425,10 @@ Value *LibCallSimplifier::optimizeStrNCat(CallInst *CI, IRBuilderBase &B) {
   Value *Size = CI->getArgOperand(2);
   uint64_t Len;
   annotateNonNullNoUndefBasedOnAccess(CI, 0);
-  if (isKnownNonZero(Size, DL))
+  if (isKnownNonZero(Size, DL)) {
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, 1);
+  }
 
   // We don't do anything if length is not constant.
   ConstantInt *LengthArg = dyn_cast<ConstantInt>(Size);
@@ -637,8 +641,10 @@ Value *LibCallSimplifier::optimizeStrNCmp(CallInst *CI, IRBuilderBase &B) {
   if (Str1P == Str2P) // strncmp(x,x,n)  -> 0
     return ConstantInt::get(CI->getType(), 0);
 
-  if (isKnownNonZero(Size, DL))
+  if (isKnownNonZero(Size, DL)) {
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, {0, 1});
+  }
   // Get the length argument if it is constant.
   uint64_t Length;
   if (ConstantInt *LengthArg = dyn_cast<ConstantInt>(Size))
@@ -766,10 +772,12 @@ Value *LibCallSimplifier::optimizeStpCpy(CallInst *CI, IRBuilderBase &B) {
 
 Value *LibCallSimplifier::optimizeStrLCpy(CallInst *CI, IRBuilderBase &B) {
   Value *Size = CI->getArgOperand(2);
-  if (isKnownNonZero(Size, DL))
+  if (isKnownNonZero(Size, DL)) {
     // Like snprintf, the function stores into the destination only when
     // the size argument is nonzero.
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, 0);
+  }
   // The function reads the source argument regardless of Size (it returns
   // its length).
   annotateNonNullNoUndefBasedOnAccess(CI, 1);
@@ -850,6 +858,7 @@ Value *LibCallSimplifier::optimizeStringNCpy(CallInst *CI, bool RetEnd,
   if (isKnownNonZero(Size, DL)) {
     // Both st{p,r}ncpy(D, S, N) access the source and destination arrays
     // only when N is nonzero.
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, 0);
     annotateNonNullNoUndefBasedOnAccess(CI, 1);
   }
@@ -939,14 +948,16 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
   Value *Src = CI->getArgOperand(0);
   Type *CharTy = B.getIntNTy(CharSize);
 
-  if (isOnlyUsedInZeroEqualityComparison(CI) &&
-      (!Bound || isKnownNonZero(Bound, DL))) {
+  bool BoundKnownNonZero = Bound && isKnownNonZero(Bound, DL);
+  if (isOnlyUsedInZeroEqualityComparison(CI) && (!Bound || BoundKnownNonZero)) {
     // Fold strlen:
     //   strlen(x) != 0 --> *x != 0
     //   strlen(x) == 0 --> *x == 0
     // and likewise strnlen with constant N > 0:
     //   strnlen(x, N) != 0 --> *x != 0
     //   strnlen(x, N) == 0 --> *x == 0
+    if (BoundKnownNonZero)
+      KBOPT_LOG();
     return B.CreateZExt(B.CreateLoad(CharTy, Src, "char0"),
                         CI->getType());
   }
@@ -1025,10 +1036,14 @@ Value *LibCallSimplifier::optimizeStringLength(CallInst *CI, IRBuilderBase &B,
       // optimize if we can prove that the program has undefined behavior when
       // Offset is outside that range. That is the case when GEP->getOperand(0)
       // is a pointer to an object whose memory extent is NullTermIdx+1.
-      if ((Known.isNonNegative() && Known.getMaxValue().ule(NullTermIdx)) ||
+      bool OffsetInRangeByKnownBits =
+          Known.isNonNegative() && Known.getMaxValue().ule(NullTermIdx);
+      if (OffsetInRangeByKnownBits ||
           (isa<GlobalVariable>(GEP->getOperand(0)) &&
            NullTermIdx == Slice.Length - 1)) {
         Offset = B.CreateSExtOrTrunc(Offset, CI->getType());
+        if (OffsetInRangeByKnownBits)
+          KBOPT_LOG();
         return B.CreateSub(ConstantInt::get(CI->getType(), NullTermIdx),
                            Offset);
       }
@@ -1065,8 +1080,10 @@ Value *LibCallSimplifier::optimizeStrNLen(CallInst *CI, IRBuilderBase &B) {
   if (Value *V = optimizeStringLength(CI, B, 8, Bound))
     return V;
 
-  if (isKnownNonZero(Bound, DL))
+  if (isKnownNonZero(Bound, DL)) {
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, 0);
+  }
   return nullptr;
 }
 
@@ -1311,6 +1328,7 @@ Value *LibCallSimplifier::optimizeMemChr(CallInst *CI, IRBuilderBase &B) {
   Value *Size = CI->getArgOperand(2);
 
   if (isKnownNonZero(Size, DL)) {
+    KBOPT_LOG();
     annotateNonNullNoUndefBasedOnAccess(CI, 0);
     if (isOnlyUsedInEqualityComparison(CI, SrcStr))
       return memChrToCharCompare(CI, Size, B, DL);
@@ -2656,6 +2674,7 @@ Value *LibCallSimplifier::optimizeLog(CallInst *Log, IRBuilderBase &B) {
 
     // Convert libcall to intrinsic if the value is known > 0.
     bool IsKnownNoErrno = Log->hasNoNaNs() && Log->hasNoInfs();
+    bool KnownNoErrnoFromKnownBits = false;
     if (!IsKnownNoErrno) {
       SimplifyQuery SQ(DL, TLI, DT, AC, Log, true, true, DC);
       KnownFPClass Known = computeKnownFPClass(
@@ -2666,8 +2685,11 @@ Value *LibCallSimplifier::optimizeLog(CallInst *Log, IRBuilderBase &B) {
       IsKnownNoErrno =
           Known.cannotBeOrderedLessThanZero() &&
           Known.isKnownNeverLogicalZero(F->getDenormalMode(FltSem));
+      KnownNoErrnoFromKnownBits = IsKnownNoErrno;
     }
     if (IsKnownNoErrno) {
+      if (KnownNoErrnoFromKnownBits)
+        KBOPT_LOG();
       auto *NewLog = B.CreateUnaryIntrinsic(LogID, Log->getArgOperand(0), Log);
       NewLog->copyMetadata(*Log);
       return copyFlags(*Log, NewLog);
@@ -2886,6 +2908,7 @@ Value *LibCallSimplifier::optimizeFMod(CallInst *CI, IRBuilderBase &B) {
   // case. If we know those do not happen, then we can convert the fmod into
   // frem.
   bool IsNoNan = CI->hasNoNaNs();
+  bool NoNanFromKnownBits = false;
   if (!IsNoNan) {
     SimplifyQuery SQ(DL, TLI, DT, AC, CI, true, true, DC);
     KnownFPClass Known0 = computeKnownFPClass(CI->getOperand(0), fcInf, SQ);
@@ -2896,10 +2919,13 @@ Value *LibCallSimplifier::optimizeFMod(CallInst *CI, IRBuilderBase &B) {
       const fltSemantics &FltSem =
           CI->getType()->getScalarType()->getFltSemantics();
       IsNoNan = Known1.isKnownNeverLogicalZero(F->getDenormalMode(FltSem));
+      NoNanFromKnownBits = IsNoNan;
     }
   }
 
   if (IsNoNan) {
+    if (NoNanFromKnownBits)
+      KBOPT_LOG();
     Value *FRem = B.CreateFRemFMF(CI->getOperand(0), CI->getOperand(1), CI);
     if (auto *FRemI = dyn_cast<Instruction>(FRem))
       FRemI->setHasNoNaNs(true);

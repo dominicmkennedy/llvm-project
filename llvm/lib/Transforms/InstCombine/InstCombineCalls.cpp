@@ -71,6 +71,7 @@
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SimplifyLibCalls.h"
+#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -624,6 +625,7 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   // instruction with a constant.
   if (PossibleZeros == DefiniteZeros) {
     auto *C = ConstantInt::get(Op0->getType(), DefiniteZeros);
+    KBOPT_LOG();
     return IC.replaceInstUsesWith(II, C);
   }
 
@@ -632,8 +634,10 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
   // because we know the zero behavior can't affect the result.
   if (!Known.One.isZero() ||
       isKnownNonZero(Op0, IC.getSimplifyQuery().getWithInstruction(&II))) {
-    if (!match(II.getArgOperand(1), m_One()))
+    if (!match(II.getArgOperand(1), m_One())) {
+      KBOPT_LOG();
       return IC.replaceOperand(II, 1, IC.Builder.getTrue());
+    }
   }
 
   // Add range attribute since known bits can't completely reflect what we know.
@@ -643,6 +647,8 @@ static Instruction *foldCttzCtlz(IntrinsicInst &II, InstCombinerImpl &IC) {
     ConstantRange Range(APInt(BitWidth, DefiniteZeros),
                         APInt(BitWidth, PossibleZeros + 1));
     II.addRangeRetAttr(Range);
+    if (DefiniteZeros != 0 || PossibleZeros != BitWidth)
+      KBOPT_LOG();
     return &II;
   }
 
@@ -700,18 +706,23 @@ static Instruction *foldCtpop(IntrinsicInst &II, InstCombinerImpl &IC) {
   // ctpop (X & 32) --> (X & 32) >> 5
   // TODO: Investigate removing this as its likely unnecessary given the below
   // `isKnownToBeAPowerOfTwo` check.
-  if ((~Known.Zero).isPowerOf2())
+  if ((~Known.Zero).isPowerOf2()) {
+    if (!Known.Zero.isZero())
+      KBOPT_LOG();
     return BinaryOperator::CreateLShr(
         Op0, ConstantInt::get(Ty, (~Known.Zero).exactLogBase2()));
+  }
 
   // More generally we can also handle non-constant power of 2 patterns such as
   // shl/shr(Pow2, X), (X & -X), etc... by transforming:
   // ctpop(Pow2OrZero) --> icmp ne X, 0
-  if (IC.isKnownToBeAPowerOfTwo(Op0, /* OrZero */ true))
+  if (IC.isKnownToBeAPowerOfTwo(Op0, /* OrZero */ true)) {
+    KBOPT_LOG();
     return CastInst::Create(Instruction::ZExt,
                             IC.Builder.CreateICmp(ICmpInst::ICMP_NE, Op0,
                                                   Constant::getNullValue(Ty)),
                             Ty);
+  }
 
   // Add range attribute since known bits can't completely reflect what we know.
   if (BitWidth != 1) {
@@ -720,16 +731,21 @@ static Instruction *foldCtpop(IntrinsicInst &II, InstCombinerImpl &IC) {
 
     unsigned Lower = Known.countMinPopulation();
     unsigned Upper = Known.countMaxPopulation() + 1;
+    bool RangeDrivenByKnownBits = Lower != 0 || Upper != BitWidth + 1;
 
     if (Lower == 0 && OldRange.contains(APInt::getZero(BitWidth)) &&
-        isKnownNonZero(Op0, IC.getSimplifyQuery().getWithInstruction(&II)))
+        isKnownNonZero(Op0, IC.getSimplifyQuery().getWithInstruction(&II))) {
       Lower = 1;
+      RangeDrivenByKnownBits = true;
+    }
 
     ConstantRange Range(APInt(BitWidth, Lower), APInt(BitWidth, Upper));
     Range = Range.intersectWith(OldRange, ConstantRange::Unsigned);
 
     if (Range != OldRange) {
       II.addRangeRetAttr(Range);
+      if (RangeDrivenByKnownBits)
+        KBOPT_LOG();
       return &II;
     }
   }
@@ -2036,11 +2052,14 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
             getKnownSignOrZero(IIOperand, SQ.getWithInstruction(II))) {
       // abs(x) -> x if x >= 0 (include abs(x-y) --> x - y where x >= y)
       // abs(x) -> x if x > 0 (include abs(x-y) --> x - y where x > y)
-      if (!*Known)
+      if (!*Known) {
+        KBOPT_LOG();
         return replaceInstUsesWith(*II, IIOperand);
+      }
 
       // abs(x) -> -x if x < 0
       // abs(x) -> -x if x < = 0 (include abs(x-y) --> y - x where x <= y)
+      KBOPT_LOG();
       if (IntMinIsPoison)
         return BinaryOperator::CreateNSWNeg(IIOperand);
       return BinaryOperator::CreateNeg(IIOperand);
@@ -2249,10 +2268,13 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
               Ty, APInt::getSignedMinValue(Ty->getScalarSizeInBits()));
         }
       }
-      if (UseOr)
+      if (UseOr) {
+        KBOPT_LOG();
         return BinaryOperator::CreateOr(I0, X);
-      else if (UseAndN)
+      } else if (UseAndN) {
+        KBOPT_LOG();
         return BinaryOperator::CreateAnd(I0, Builder.CreateNot(X));
+      }
     }
 
     // If we can eliminate ~A and Y is free to invert:
@@ -2406,7 +2428,9 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // bswap(x) -> shift(x) if x has exactly one "active byte"
     if (BW - LZ - TZ == 8) {
       assert(LZ != TZ && "active byte cannot be in the middle");
-      if (LZ > TZ)  // -> shl(x) if the "active byte" is in the low part of x
+      if (LZ != 0 || TZ != 0)
+        KBOPT_LOG();
+      if (LZ > TZ) // -> shl(x) if the "active byte" is in the low part of x
         return BinaryOperator::CreateNUWShl(
             IIOperand, ConstantInt::get(IIOperand->getType(), LZ - TZ));
       // -> lshr(x) if the "active byte" is in the high part of x
@@ -3172,10 +3196,16 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
       FastMathFlags FMF = II->getFastMathFlags();
       FastMathFlags InnerFlags = cast<FPMathOperator>(Src)->getFastMathFlags();
 
-      if ((FMF.allowReassoc() && InnerFlags.allowReassoc()) ||
-          signBitMustBeTheSame(Exp, InnerExp, SQ.getWithInstruction(II))) {
+      bool ReassociationAllowed =
+          FMF.allowReassoc() && InnerFlags.allowReassoc();
+      bool SameSignByKnownBits =
+          !ReassociationAllowed &&
+          signBitMustBeTheSame(Exp, InnerExp, SQ.getWithInstruction(II));
+      if (ReassociationAllowed || SameSignByKnownBits) {
         // TODO: Add nsw/nuw probably safe if integer type exceeds exponent
         // width.
+        if (SameSignByKnownBits)
+          KBOPT_LOG();
         Value *NewExp = Builder.CreateAdd(InnerExp, Exp);
         II->setArgOperand(1, NewExp);
         II->setFastMathFlags(InnerFlags); // Or the inner flags.
@@ -3415,8 +3445,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
       uint64_t Mask1 = computeKnownBits(Mask, II).One.getZExtValue();
       // Check if every byte has common bits in Bytes and Mask.
       uint64_t C = Bytes1 & Mask1;
-      if ((C & 0xFF) && (C & 0xFF00) && (C & 0xFF0000) && (C & 0xFF000000))
+      if ((C & 0xFF) && (C & 0xFF00) && (C & 0xFF0000) && (C & 0xFF000000)) {
+        KBOPT_LOG();
         return replaceInstUsesWith(*II, Op0->getArgOperand(0));
+      }
     }
     break;
   }
@@ -3639,6 +3671,7 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
                                Value::MaxAlignmentExponent);
         if ((1ULL << TZ) < RK.ArgValue)
           continue;
+        KBOPT_LOG();
         return CallBase::removeOperandBundle(II, OBU.getTagID());
       }
     }
@@ -3735,8 +3768,10 @@ Instruction *InstCombinerImpl::visitCallInst(CallInst &CI) {
     // then this one is redundant, and should be removed.
     KnownBits Known(1);
     computeKnownBits(IIOperand, Known, II);
-    if (Known.isAllOnes() && isAssumeWithEmptyBundle(cast<AssumeInst>(*II)))
+    if (Known.isAllOnes() && isAssumeWithEmptyBundle(cast<AssumeInst>(*II))) {
+      KBOPT_LOG();
       return eraseInstFromFunction(*II);
+    }
 
     // assume(false) is unreachable.
     if (match(IIOperand, m_CombineOr(m_Zero(), m_Undef()))) {

@@ -26,6 +26,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
+#include "llvm/Support/KBOptLog.h"
 #include <iterator>
 #include <optional>
 
@@ -1167,10 +1168,13 @@ Instruction *InstCombinerImpl::visitTrunc(TruncInst &Trunc) {
 
   if (DestWidth == 1 &&
       (Trunc.hasNoUnsignedWrap() || Trunc.hasNoSignedWrap()) &&
-      isKnownNonZero(Src, SQ.getWithInstruction(&Trunc)))
+      isKnownNonZero(Src, SQ.getWithInstruction(&Trunc))) {
+    KBOPT_LOG();
     return replaceInstUsesWith(Trunc, ConstantInt::getTrue(DestTy));
+  }
 
   bool Changed = false;
+  bool ChangedByKnownBits = false;
   if (!Trunc.hasNoSignedWrap() &&
       ComputeMaxSignificantBits(Src, &Trunc) <= DestWidth) {
     Trunc.setHasNoSignedWrap(true);
@@ -1181,6 +1185,7 @@ Instruction *InstCombinerImpl::visitTrunc(TruncInst &Trunc) {
                         &Trunc)) {
     Trunc.setHasNoUnsignedWrap(true);
     Changed = true;
+    ChangedByKnownBits = true;
   }
 
   const APInt *C1;
@@ -1208,6 +1213,8 @@ Instruction *InstCombinerImpl::visitTrunc(TruncInst &Trunc) {
     return new ICmpInst(ICmpInst::ICMP_UGE, V1, Right);
   }
 
+  if (ChangedByKnownBits)
+    KBOPT_LOG();
   return Changed ? &Trunc : nullptr;
 }
 
@@ -1266,6 +1273,7 @@ Instruction *InstCombinerImpl::transformZExtICmp(ICmpInst *Cmp,
         if (Cmp->getPredicate() == ICmpInst::ICMP_EQ)
           In = Builder.CreateXor(In, ConstantInt::get(In->getType(), 1));
 
+        KBOPT_LOG();
         if (Zext.getType() == In->getType())
           return replaceInstUsesWith(Zext, In);
 
@@ -1589,6 +1597,7 @@ Instruction *InstCombinerImpl::visitZExt(ZExtInst &Zext) {
     }
 
     if (isKnownNonNegative(Src, SQ.getWithInstruction(&Zext))) {
+      KBOPT_LOG();
       Zext.setNonNeg();
       return &Zext;
     }
@@ -1635,6 +1644,7 @@ Instruction *InstCombinerImpl::transformSExtICmp(ICmpInst *Cmp,
           Value *V = Pred == ICmpInst::ICMP_NE ?
                        ConstantInt::getAllOnesValue(Sext.getType()) :
                        ConstantInt::getNullValue(Sext.getType());
+          KBOPT_LOG();
           return replaceInstUsesWith(Sext, V);
         }
 
@@ -1666,6 +1676,7 @@ Instruction *InstCombinerImpl::transformSExtICmp(ICmpInst *Cmp,
                                   KnownZeroMask.getBitWidth() - 1), "sext");
         }
 
+        KBOPT_LOG();
         if (Sext.getType() == In->getType())
           return replaceInstUsesWith(Sext, In);
         return CastInst::CreateIntegerCast(In, Sext.getType(), true/*SExt*/);
@@ -1755,6 +1766,7 @@ Instruction *InstCombinerImpl::visitSExt(SExtInst &Sext) {
 
   // If the value being extended is zero or positive, use a zext instead.
   if (isKnownNonNegative(Src, SQ.getWithInstruction(&Sext))) {
+    KBOPT_LOG();
     auto CI = CastInst::Create(Instruction::ZExt, Src, DestTy);
     CI->setNonNeg(true);
     return CI;
@@ -2296,8 +2308,10 @@ static Instruction *foldFPtoI(Instruction &FI, InstCombiner &IC) {
       FI.getOpcode() == Instruction::FPToUI ? fcPosNormal : fcNormal;
   KnownFPClass FPClass = computeKnownFPClass(
       FI.getOperand(0), Mask, IC.getSimplifyQuery().getWithInstruction(&FI));
-  if (FPClass.isKnownNever(Mask))
+  if (FPClass.isKnownNever(Mask)) {
+    KBOPT_LOG();
     return IC.replaceInstUsesWith(FI, ConstantInt::getNullValue(FI.getType()));
+  }
 
   return nullptr;
 }
@@ -2326,6 +2340,7 @@ Instruction *InstCombinerImpl::visitUIToFP(CastInst &CI) {
   if (Instruction *R = commonCastTransforms(CI))
     return R;
   if (!CI.hasNonNeg() && isKnownNonNegative(CI.getOperand(0), SQ)) {
+    KBOPT_LOG();
     CI.setNonNeg();
     return &CI;
   }
@@ -2336,6 +2351,7 @@ Instruction *InstCombinerImpl::visitSIToFP(CastInst &CI) {
   if (Instruction *R = commonCastTransforms(CI))
     return R;
   if (isKnownNonNegative(CI.getOperand(0), SQ)) {
+    KBOPT_LOG();
     auto *UI =
         CastInst::Create(Instruction::UIToFP, CI.getOperand(0), CI.getType());
     UI->setNonNeg(true);
@@ -3080,6 +3096,7 @@ static Value *foldCopySignIdioms(BitCastInst &CI,
   if (!isKnownNonNegative(Y, SQ))
     return nullptr;
 
+  KBOPT_LOG();
   return Builder.CreateCopySign(Builder.CreateBitCast(Y, FTy), X);
 }
 

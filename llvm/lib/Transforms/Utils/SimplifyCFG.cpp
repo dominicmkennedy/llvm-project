@@ -77,6 +77,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LockstepReverseIterator.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Support/KBOptLog.h"
 #include <algorithm>
 #include <cassert>
 #include <climits>
@@ -6137,7 +6138,9 @@ static bool eliminateDeadSwitchCases(SwitchInst *SI, DomTreeUpdater *DTU,
     }
     ConstantInt *CaseC = Case.getCaseValue();
     const APInt &CaseVal = CaseC->getValue();
-    if (Known.Zero.intersects(CaseVal) || !Known.One.isSubsetOf(CaseVal) ||
+    bool DeadByKnownBits =
+        Known.Zero.intersects(CaseVal) || !Known.One.isSubsetOf(CaseVal);
+    if (DeadByKnownBits ||
         (CaseVal.getSignificantBits() > MaxSignificantBitsInCond) ||
         (IsKnownValuesValid && !KnownValues.contains(CaseC))) {
       DeadCases.push_back(CaseC);
@@ -6145,6 +6148,8 @@ static bool eliminateDeadSwitchCases(SwitchInst *SI, DomTreeUpdater *DTU,
         --NumPerSuccessorCases[Successor];
       LLVM_DEBUG(dbgs() << "SimplifyCFG: switch case " << CaseVal
                         << " is dead.\n");
+      if (DeadByKnownBits)
+        KBOPT_LOG();
     } else if (IsKnownValuesValid)
       KnownValues.erase(CaseC);
   }
@@ -6164,8 +6169,11 @@ static bool eliminateDeadSwitchCases(SwitchInst *SI, DomTreeUpdater *DTU,
     }
 
     if (NumUnknownBits < 64 /* avoid overflow */) {
+      bool KnownBitsReducedCases = NumUnknownBits != Known.getBitWidth();
       uint64_t AllNumCases = 1ULL << NumUnknownBits;
       if (SI->getNumCases() == AllNumCases) {
+        if (KnownBitsReducedCases)
+          KBOPT_LOG();
         createUnreachableSwitchDefault(SI, DTU);
         return true;
       }
@@ -6187,6 +6195,8 @@ static bool eliminateDeadSwitchCases(SwitchInst *SI, DomTreeUpdater *DTU,
         SwitchInstProfUpdateWrapper SIW(*SI);
         SIW.addCase(MissingCase, SI->getDefaultDest(),
                     SIW.getSuccessorWeight(0));
+        if (KnownBitsReducedCases)
+          KBOPT_LOG();
         createUnreachableSwitchDefault(SI, DTU,
                                        /*RemoveOrigDefaultBlock*/ false);
         SIW.setSuccessorWeight(0, 0);
@@ -6609,7 +6619,8 @@ static Value *foldSwitchToSelect(const SwitchCaseResultVectorTy &ResultVector,
 
       if (!AndMask.isZero() && Known.getMaxValue().uge(AndMask)) {
         // Compute the number of bits that are free to vary.
-        unsigned FreeBits = Known.countMaxActiveBits() - AndMask.popcount();
+        unsigned MaxActiveBits = Known.countMaxActiveBits();
+        unsigned FreeBits = MaxActiveBits - AndMask.popcount();
 
         // Check if the number of values covered by the mask is equal
         // to the number of cases.
@@ -6628,6 +6639,8 @@ static Value *foldSwitchToSelect(const SwitchCaseResultVectorTy &ResultVector,
                 {accumulate(drop_begin(BranchWeights), 0U), BranchWeights[0]},
                 /*IsExpected=*/false, /*ElideAllZero=*/true);
           }
+          if (MaxActiveBits != Known.getBitWidth())
+            KBOPT_LOG();
           return Ret;
         }
       }

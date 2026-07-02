@@ -22,6 +22,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/KBOptLog.h"
 using namespace llvm;
 using namespace PatternMatch;
 
@@ -923,7 +924,7 @@ static bool isObjectSizeLessThanOrEq(Value *V, uint64_t MaxSize,
 // offsets those indices implied.
 static bool canReplaceGEPIdxWithZero(InstCombinerImpl &IC,
                                      GetElementPtrInst *GEPI, Instruction *MemI,
-                                     unsigned &Idx) {
+                                     unsigned &Idx, bool &UsedKnownBits) {
   if (GEPI->getNumOperands() < 2)
     return false;
 
@@ -971,8 +972,10 @@ static bool canReplaceGEPIdxWithZero(InstCombinerImpl &IC,
   auto IsAllNonNegative = [&]() {
     for (unsigned i = Idx+1, e = GEPI->getNumOperands(); i != e; ++i) {
       KnownBits Known = IC.computeKnownBits(GEPI->getOperand(i), MemI);
-      if (Known.isNonNegative())
+      if (Known.isNonNegative()) {
+        UsedKnownBits = true;
         continue;
+      }
       return false;
     }
 
@@ -1000,11 +1003,14 @@ static Instruction *replaceGEPIdxWithZero(InstCombinerImpl &IC, Value *Ptr,
                                           Instruction &MemI) {
   if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(Ptr)) {
     unsigned Idx;
-    if (canReplaceGEPIdxWithZero(IC, GEPI, &MemI, Idx)) {
+    bool UsedKnownBits = false;
+    if (canReplaceGEPIdxWithZero(IC, GEPI, &MemI, Idx, UsedKnownBits)) {
       Instruction *NewGEPI = GEPI->clone();
       NewGEPI->setOperand(Idx,
         ConstantInt::get(GEPI->getOperand(Idx)->getType(), 0));
       IC.InsertNewInstBefore(NewGEPI, GEPI->getIterator());
+      if (UsedKnownBits)
+        KBOPT_LOG();
       return NewGEPI;
     }
   }

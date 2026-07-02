@@ -63,6 +63,7 @@
 #include "llvm/Transforms/Utils/MemoryTaggingSupport.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "llvm/Support/KBOptLog.h"
 #include <optional>
 #include <random>
 
@@ -1170,8 +1171,10 @@ bool HWAddressSanitizer::instrumentMemAccess(InterestingMemoryOperand &O,
   // We can therefore elide the tag check.
   llvm::KnownBits Known(DL.getPointerTypeSizeInBits(Addr->getType()));
   llvm::computeKnownBits(Addr, Known, DL);
-  if (Known.isZero())
+  if (Known.isZero()) {
+    KBOPT_LOG();
     return false;
+  }
 
   if (O.MaybeMask)
     return false; // FIXME
