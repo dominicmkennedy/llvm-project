@@ -92,6 +92,11 @@ struct SimplifyQuery {
   /// off") baseline so the net top-level gain from patterns can be measured.
   bool DisablePatterns = false;
 
+  /// When true, patterns are enabled for a shadow known-bits measurement query.
+  /// The result may use recursive pattern improvements, but the query must not
+  /// perturb normal statistics.
+  bool PatternMeasurement = false;
+
   SimplifyQuery(const DataLayout &DL, const Instruction *CXTI = nullptr)
       : DL(DL), CxtI(CXTI) {}
 
@@ -146,6 +151,13 @@ struct SimplifyQuery {
   SimplifyQuery getWithPatternsDisabled() const {
     SimplifyQuery Copy(*this);
     Copy.DisablePatterns = true;
+    return Copy;
+  }
+
+  SimplifyQuery getWithPatternMeasurement() const {
+    SimplifyQuery Copy(*this);
+    Copy.DisablePatterns = false;
+    Copy.PatternMeasurement = true;
     return Copy;
   }
 };

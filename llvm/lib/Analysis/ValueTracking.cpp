@@ -2969,9 +2969,9 @@ KnownBits llvm::computeKnownBits(const Value *V, const SimplifyQuery &Q,
 void computeKnownBits(const Value *V, const APInt &DemandedElts,
                       KnownBits &Known, const SimplifyQuery &Q,
                       unsigned Depth) {
-  // The "pattern off" shadow pass (Q.DisablePatterns) is synthetic measurement
-  // work; it must not touch any statistic, so all counters are gated below.
-  if (!Q.DisablePatterns) {
+  // Shadow analysis passes are synthetic measurement work; they must not touch
+  // ordinary query statistics, so all counters are gated below.
+  if (!Q.DisablePatterns && !Q.PatternMeasurement) {
     ++NumKBQueries;
     if (Depth == 0)
       ++NumKBTopLevelQueries;
@@ -2980,19 +2980,21 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   // Pattern-off baseline popcount for the net top-level gain measurement, filled
   // in by the shadow pass below. -1 means "not measured for this query".
   int PatternFreePopcount = -1;
+  std::optional<unsigned> PatternOnPopcount;
   auto CountKnownBitsOnExit = scope_exit([&] {
-    if (Q.DisablePatterns)
+    if (Q.DisablePatterns || Q.PatternMeasurement)
       return;
     unsigned KnownCount = (Known.Zero | Known.One).popcount();
+    unsigned MeasuredPatternCount = PatternOnPopcount.value_or(KnownCount);
     TotalKnownBits += KnownCount;
     if (Depth == 0) {
       TotalKnownBitsTopLevel += KnownCount;
       // Net gain that patterns actually surface at the top level, on identical
       // IR: pattern-on final known bits minus the existing-only baseline.
       if (PatternFreePopcount >= 0 &&
-          KnownCount > static_cast<unsigned>(PatternFreePopcount)) {
+          MeasuredPatternCount > static_cast<unsigned>(PatternFreePopcount)) {
         unsigned BitsAdded =
-            KnownCount - static_cast<unsigned>(PatternFreePopcount);
+            MeasuredPatternCount - static_cast<unsigned>(PatternFreePopcount);
         ++NumPatternKBImprovedQueriesTopLevel;
         PatternKBBitsAddedTopLevel += BitsAdded;
         PatternKBRelativeReducedTopLevel +=
@@ -3012,15 +3014,22 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
     }
   });
 
-  // Once per top-level query, recompute known bits with patterns disabled
-  // throughout the whole recursive subtree to obtain the existing-transformers-
-  // only baseline. The shadow pass sets Q.DisablePatterns, so it neither
-  // recurses into another shadow pass nor perturbs any statistic.
-  if (Depth == 0 && !Q.DisablePatterns && EnablePatternOffBaseline) {
+  // Once per top-level query, compute both the existing-transformers-only result
+  // returned to LLVM and a pattern-enabled shadow result used only for stats.
+  if (Depth == 0 && !Q.DisablePatterns && !Q.PatternMeasurement &&
+      EnablePatternOffBaseline) {
     KnownBits PatternFree(Known.getBitWidth());
     computeKnownBits(V, DemandedElts, PatternFree, Q.getWithPatternsDisabled(),
                      Depth);
     PatternFreePopcount = (PatternFree.Zero | PatternFree.One).popcount();
+
+    KnownBits WithPatterns(Known.getBitWidth());
+    computeKnownBits(V, DemandedElts, WithPatterns,
+                     Q.getWithPatternMeasurement(), Depth);
+    PatternOnPopcount = (WithPatterns.Zero | WithPatterns.One).popcount();
+
+    Known = std::move(PatternFree);
+    return;
   }
 
   if (!DemandedElts) {
@@ -3141,7 +3150,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
   if (!Q.DisablePatterns) {
     if (const auto *I = dyn_cast<Operator>(V)) {
       computePatternKBMatches(I, Q, Depth, PatternMatches);
-      if (!PatternMatches.empty()) {
+      if (!PatternMatches.empty() && !Q.PatternMeasurement) {
         ++NumKBPatternMatches;
         if (Depth == 0)
           ++NumKBPatternMatchesTopLevel;
@@ -3177,10 +3186,12 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
       const unsigned BitsAdded = After > Before ? (After - Before) : 0;
       const uint64_t RelativeReduced =
           getRelativeReductionPerThousand(BitsAdded, Known.getBitWidth());
-      recordKBPatternImpact(PM.ID, BitsAdded, RelativeReduced, Conflict);
-      recordKBPatternHistogram(PM.ID, PM.Inputs);
+      if (!Q.PatternMeasurement) {
+        recordKBPatternImpact(PM.ID, BitsAdded, RelativeReduced, Conflict);
+        recordKBPatternHistogram(PM.ID, PM.Inputs);
+      }
 
-      if (Conflict) {
+      if (Conflict && !Q.PatternMeasurement) {
         ++NumPatternKBConflicts;
         const auto *Inst = dyn_cast<Instruction>(V);
         const Module *M = Inst ? Inst->getModule() : nullptr;
@@ -3194,7 +3205,7 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
                                << "\" value=" << *V << "\n");
       }
 
-      if (BitsAdded > 0) {
+      if (BitsAdded > 0 && !Q.PatternMeasurement) {
         ++NumPatternKBImprovedQueries;
         PatternKBBitsAdded += BitsAdded;
         PatternKBRelativeReduced += RelativeReduced;
@@ -3206,8 +3217,17 @@ void computeKnownBits(const Value *V, const APInt &DemandedElts,
         PatternKnown = PatternKnown->unionWith(PM.KB);
     }
 
-    if (PatternKnown)
-      Known = Known.unionWith(*PatternKnown);
+    if (PatternKnown) {
+      KnownBits PatternEnhanced = Known.unionWith(*PatternKnown);
+      if (EnablePatternOffBaseline && !Q.DisablePatterns &&
+          !Q.PatternMeasurement) {
+        if (Depth == 0)
+          PatternOnPopcount =
+              (PatternEnhanced.Zero | PatternEnhanced.One).popcount();
+      } else {
+        Known = std::move(PatternEnhanced);
+      }
+    }
   }
 
   // Aligned pointers have trailing zeros - refine Known.Zero set
@@ -10967,14 +10987,15 @@ static ConstantRange
 computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
                          AssumptionCache *AC, const Instruction *CtxI,
                          const DominatorTree *DT, unsigned Depth,
-                         bool DisablePatterns) {
+                         bool DisablePatterns, bool PatternMeasurement) {
   assert(V->getType()->isIntOrIntVectorTy() && "Expected integer instruction");
 
-  if (ForSigned ? EnableSignedConstantRangePatternMining
-                : EnableUnsignedConstantRangePatternMining)
+  if (!DisablePatterns && !PatternMeasurement &&
+      (ForSigned ? EnableSignedConstantRangePatternMining
+                 : EnableUnsignedConstantRangePatternMining))
     DAGSlicer::recordDAG(V, Depth, MaxAnalysisRecursionDepth);
 
-  if (!DisablePatterns && Depth == 0) {
+  if (!DisablePatterns && !PatternMeasurement && Depth == 0) {
     if (ForSigned)
       ++NumSCRTopLevelQueries;
     else
@@ -10988,11 +11009,46 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
     return C->toConstantRange();
 
   unsigned BitWidth = V->getType()->getScalarSizeInBits();
-  std::optional<ConstantRange> PatternFreeCR;
-  if (Depth == 0 && !DisablePatterns && EnablePatternOffBaseline)
-    PatternFreeCR = computeConstantRangeImpl(
+  if (Depth == 0 && !DisablePatterns && !PatternMeasurement &&
+      EnablePatternOffBaseline) {
+    ConstantRange PatternFreeCR = computeConstantRangeImpl(
         V, ForSigned, UseInstrInfo, AC, CtxI, DT, Depth,
-        /*DisablePatterns=*/true);
+        /*DisablePatterns=*/true, /*PatternMeasurement=*/false);
+    ConstantRange WithPatterns = computeConstantRangeImpl(
+        V, ForSigned, UseInstrInfo, AC, CtxI, DT, Depth,
+        /*DisablePatterns=*/false, /*PatternMeasurement=*/true);
+
+    uint64_t PrecisionBitsAdded = 0;
+    uint64_t RelativeReduced = 0;
+    unsigned PatternFreePrecisionBits =
+        getConstantRangePrecisionBits(PatternFreeCR);
+    recordConstantRangeReduction(PatternFreeCR, WithPatterns,
+                                 PrecisionBitsAdded, RelativeReduced);
+    if (ForSigned) {
+      if (WithPatterns != PatternFreeCR)
+        ++NumPatternSCRImprovedQueriesTopLevel;
+      PatternSCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
+      if (!isa<Constant>(V))
+        PatternSCRVanillaPrecisionBitsTopLevelNonConstant +=
+            PatternFreePrecisionBits;
+      PatternSCRFinalPrecisionBitsTopLevel +=
+          getConstantRangePrecisionBits(WithPatterns);
+      PatternSCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
+      PatternSCRRelativeReducedTopLevel += RelativeReduced;
+    } else {
+      if (WithPatterns != PatternFreeCR)
+        ++NumPatternUCRImprovedQueriesTopLevel;
+      PatternUCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
+      if (!isa<Constant>(V))
+        PatternUCRVanillaPrecisionBitsTopLevelNonConstant +=
+            PatternFreePrecisionBits;
+      PatternUCRFinalPrecisionBitsTopLevel +=
+          getConstantRangePrecisionBits(WithPatterns);
+      PatternUCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
+      PatternUCRRelativeReducedTopLevel += RelativeReduced;
+    }
+    return PatternFreeCR;
+  }
 
   InstrInfoQuery IIQ(UseInstrInfo);
   ConstantRange CR = ConstantRange::getFull(BitWidth);
@@ -11007,10 +11063,10 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
   else if (auto *SI = dyn_cast<SelectInst>(V)) {
     ConstantRange CRTrue = computeConstantRangeImpl(
         SI->getTrueValue(), ForSigned, UseInstrInfo, AC, CtxI, DT, Depth + 1,
-        DisablePatterns);
+        DisablePatterns, PatternMeasurement);
     ConstantRange CRFalse = computeConstantRangeImpl(
         SI->getFalseValue(), ForSigned, UseInstrInfo, AC, CtxI, DT, Depth + 1,
-        DisablePatterns);
+        DisablePatterns, PatternMeasurement);
     CR = CRTrue.unionWith(CRFalse);
     CR = CR.intersectWith(getRangeForSelectPattern(*SI, IIQ));
   } else if (isa<FPToUIInst>(V) || isa<FPToSIInst>(V)) {
@@ -11053,7 +11109,7 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
       // TODO: Set "ForSigned" parameter via Cmp->isSigned()?
       ConstantRange RHS = computeConstantRangeImpl(
           Cmp->getOperand(1), /* ForSigned */ false, UseInstrInfo, AC, I, DT,
-          Depth + 1, DisablePatterns);
+          Depth + 1, DisablePatterns, PatternMeasurement);
       CR = CR.intersectWith(
           ConstantRange::makeAllowedICmpRegion(Cmp->getPredicate(), RHS));
     }
@@ -11068,7 +11124,7 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
       else
         computePatternUCRMatches(I, UseInstrInfo, AC, CtxI, DT, Depth,
                                  PatternMatches);
-      if (!PatternMatches.empty()) {
+      if (!PatternMatches.empty() && !PatternMeasurement) {
         if (ForSigned) {
           ++NumPatternSCRMatches;
           if (Depth == 0)
@@ -11097,15 +11153,17 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
       uint64_t RelativeReduced = 0;
       recordConstantRangeReduction(VanillaCR, Candidate, PrecisionBitsAdded,
                                    RelativeReduced);
-      if (ForSigned)
-        recordSCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
-                               Bottom);
-      else
-        recordUCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
-                               Bottom);
-      recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned);
+      if (!PatternMeasurement) {
+        if (ForSigned)
+          recordSCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
+                                 Bottom);
+        else
+          recordUCRPatternImpact(PM.ID, PrecisionBitsAdded, RelativeReduced,
+                                 Bottom);
+        recordCRPatternHistogram(PM.ID, PM.Inputs, ForSigned);
+      }
 
-      if (Improved) {
+      if (Improved && !PatternMeasurement) {
         if (ForSigned) {
           ++NumPatternSCRImprovedQueries;
           PatternSCRPrecisionBitsAdded += PrecisionBitsAdded;
@@ -11116,7 +11174,7 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
           PatternUCRRelativeReduced += RelativeReduced;
         }
       }
-      if (Bottom) {
+      if (Bottom && !PatternMeasurement) {
         if (ForSigned)
           ++NumPatternSCRBottom;
         else
@@ -11133,38 +11191,6 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
       CR = CR.intersectWith(*PatternCR, RangeType);
   }
 
-  if (PatternFreeCR) {
-    uint64_t PrecisionBitsAdded = 0;
-    uint64_t RelativeReduced = 0;
-    unsigned PatternFreePrecisionBits =
-        getConstantRangePrecisionBits(*PatternFreeCR);
-    recordConstantRangeReduction(*PatternFreeCR, CR, PrecisionBitsAdded,
-                                 RelativeReduced);
-    if (ForSigned) {
-      if (CR != *PatternFreeCR)
-        ++NumPatternSCRImprovedQueriesTopLevel;
-      PatternSCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
-      if (!isa<Constant>(V))
-        PatternSCRVanillaPrecisionBitsTopLevelNonConstant +=
-            PatternFreePrecisionBits;
-      PatternSCRFinalPrecisionBitsTopLevel +=
-          getConstantRangePrecisionBits(CR);
-      PatternSCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
-      PatternSCRRelativeReducedTopLevel += RelativeReduced;
-    } else {
-      if (CR != *PatternFreeCR)
-        ++NumPatternUCRImprovedQueriesTopLevel;
-      PatternUCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
-      if (!isa<Constant>(V))
-        PatternUCRVanillaPrecisionBitsTopLevelNonConstant +=
-            PatternFreePrecisionBits;
-      PatternUCRFinalPrecisionBitsTopLevel +=
-          getConstantRangePrecisionBits(CR);
-      PatternUCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
-      PatternUCRRelativeReducedTopLevel += RelativeReduced;
-    }
-  }
-
   return CR;
 }
 
@@ -11174,7 +11200,8 @@ ConstantRange llvm::computeConstantRange(const Value *V, bool ForSigned,
                                          const DominatorTree *DT,
                                          unsigned Depth) {
   return computeConstantRangeImpl(V, ForSigned, UseInstrInfo, AC, CtxI, DT,
-                                  Depth, /*DisablePatterns=*/false);
+                                  Depth, /*DisablePatterns=*/false,
+                                  /*PatternMeasurement=*/false);
 }
 
 static void
