@@ -1,0 +1,44 @@
+namespace Select_ICmpUlt_arg0_arg1_Lshr_arg1_arg2_arg1 {
+namespace {
+struct Entry { unsigned bw; uint64_t argZ[3], argO[3], outZ, outO; };
+static constexpr Entry kEntries[] = {
+  {32u, {0xFFFF0000ULL, 0x0ULL, 0xFFFFFFEFULL}, {0xFFFFULL, 0x0ULL, 0x10ULL}, 0xFFFF0000ULL, 0x0ULL},
+  {32u, {0xFFFFFF00ULL, 0x0ULL, 0xFFFFFFF7ULL}, {0xFFULL, 0x0ULL, 0x8ULL}, 0xFF000000ULL, 0x0ULL},
+  {32u, {0xFFFFFF00ULL, 0xFFFF0000ULL, 0xFFFFFFF7ULL}, {0xFFULL, 0x0ULL, 0x8ULL}, 0xFFFFFF00ULL, 0x0ULL},
+  {32u, {0xFFFFFFF0ULL, 0xFFFFFF00ULL, 0xFFFFFFFBULL}, {0xFULL, 0x0ULL, 0x4ULL}, 0xFFFFFFF0ULL, 0x0ULL},
+  {32u, {0xFFFFFFF0ULL, 0xFF000000ULL, 0xFFFFFFFBULL}, {0xFULL, 0x0ULL, 0x4ULL}, 0xFFF00000ULL, 0x0ULL},
+  {32u, {0xFFFFFFFCULL, 0xFFF00000ULL, 0xFFFFFFFDULL}, {0x3ULL, 0x0ULL, 0x2ULL}, 0xFFFC0000ULL, 0x0ULL},
+  {32u, {0xFFFFFFFEULL, 0x0ULL, 0xFFFFFFFEULL}, {0x1ULL, 0x0ULL, 0x1ULL}, 0x80000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFF00000000ULL, 0x0ULL, 0xFFFFFFFFFFFFFFDFULL}, {0xFFFFFFFFULL, 0x0ULL, 0x20ULL}, 0xFFFFFFFF00000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFF0000ULL, 0xFFFFFFFF00000000ULL, 0xFFFFFFFFFFFFFFEFULL}, {0xFFFFULL, 0x0ULL, 0x10ULL}, 0xFFFFFFFFFFFF0000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFF00ULL, 0xFFFFFFFFFFFF0000ULL, 0xFFFFFFFFFFFFFFF7ULL}, {0xFFULL, 0x0ULL, 0x8ULL}, 0xFFFFFFFFFFFFFF00ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFF00ULL, 0xFFFF000000000000ULL, 0xFFFFFFFFFFFFFFF7ULL}, {0xFFULL, 0x0ULL, 0x8ULL}, 0xFFFFFF0000000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFFF0ULL, 0xFFFFFFFFFFFFFF00ULL, 0xFFFFFFFFFFFFFFFBULL}, {0xFULL, 0x0ULL, 0x4ULL}, 0xFFFFFFFFFFFFFFF0ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFFF0ULL, 0xFFFFFFFF00000000ULL, 0xFFFFFFFFFFFFFFFBULL}, {0xFULL, 0x0ULL, 0x4ULL}, 0xFFFFFFFFF0000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFFF0ULL, 0xFF00000000000000ULL, 0xFFFFFFFFFFFFFFFBULL}, {0xFULL, 0x0ULL, 0x4ULL}, 0xFFF0000000000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFFF0ULL, 0xFFFFFF0000000000ULL, 0xFFFFFFFFFFFFFFFBULL}, {0xFULL, 0x0ULL, 0x4ULL}, 0xFFFFFFF000000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFFFFFFFFFCULL, 0xFFF0000000000000ULL, 0xFFFFFFFFFFFFFFFDULL}, {0x3ULL, 0x0ULL, 0x2ULL}, 0xFFFC000000000000ULL, 0x0ULL},
+};
+} // namespace
+
+std::array<APInt, 2> solution(unsigned bw, std::array<APInt, 2> ssa_0, std::array<APInt, 2> ssa_1, std::array<APInt, 2> ssa_2) {
+  unsigned opbw = ssa_0[0].getBitWidth();
+  if (ssa_0[0].getBitWidth() > 64 || ssa_1[0].getBitWidth() > 64 || ssa_2[0].getBitWidth() > 64) return std::array<APInt, 2>{APInt(bw, 0), APInt(bw, 0)};
+  uint64_t inZ[3], inO[3];
+  inZ[0] = ssa_0[0].getZExtValue();
+  inO[0] = ssa_0[1].getZExtValue();
+  inZ[1] = ssa_1[0].getZExtValue();
+  inO[1] = ssa_1[1].getZExtValue();
+  inZ[2] = ssa_2[0].getZExtValue();
+  inO[2] = ssa_2[1].getZExtValue();
+  uint64_t outZ = 0, outO = 0;
+  for (const Entry &E : kEntries) {
+    if (E.bw != opbw) continue;
+    bool match = true;
+    for (unsigned a = 0; a < 3; ++a)
+      if ((E.argZ[a] & ~inZ[a]) | (E.argO[a] & ~inO[a])) { match = false; break; }
+    if (match) outZ |= E.outZ, outO |= E.outO;
+  }
+  return std::array<APInt, 2>{APInt(bw, outZ), APInt(bw, outO)};
+}
+}

@@ -1,0 +1,41 @@
+namespace AddNuw_AddNswNuw_arg0_arg1_arg2 {
+namespace {
+struct Entry { unsigned bw; uint64_t argZ[3], argO[3], outZ, outO; };
+static constexpr Entry kEntries[] = {
+  {8u, {0xDFULL, 0xDFULL, 0xDFULL}, {0x0ULL, 0x0ULL, 0x0ULL}, 0x9FULL, 0x0ULL},
+  {8u, {0xCFULL, 0xEFULL, 0xEFULL}, {0x0ULL, 0x0ULL, 0x0ULL}, 0x8FULL, 0x0ULL},
+  {16u, {0xC000ULL, 0xFFDFULL, 0xFE00ULL}, {0x0ULL, 0x20ULL, 0x0ULL}, 0x8000ULL, 0x0ULL},
+  {16u, {0xC000ULL, 0xFF7FULL, 0xFF80ULL}, {0x0ULL, 0x80ULL, 0x0ULL}, 0x8000ULL, 0x0ULL},
+  {16u, {0xC000ULL, 0xFC00ULL, 0xFFF7ULL}, {0x0ULL, 0x0ULL, 0x8ULL}, 0x8000ULL, 0x0ULL},
+  {32u, {0xFFFFFFFCULL, 0xFFFFFFC0ULL, 0xFFFFFFDEULL}, {0x0ULL, 0x0ULL, 0x21ULL}, 0xFFFFFF80ULL, 0x0ULL},
+  {32u, {0xFFFFFFC0ULL, 0xFFFFFF80ULL, 0xFFFFFFC0ULL}, {0x0ULL, 0x0ULL, 0x3FULL}, 0xFFFFFF00ULL, 0x0ULL},
+  {32u, {0xC0000000ULL, 0xFFFFFFF8ULL, 0xFFFFFFF7ULL}, {0x0ULL, 0x0ULL, 0x8ULL}, 0x80000000ULL, 0x0ULL},
+  {32u, {0xFFFFFA95ULL, 0xC0000000ULL, 0xFFFFFFEBULL}, {0x0ULL, 0x0ULL, 0x14ULL}, 0x80000000ULL, 0x0ULL},
+  {32u, {0xC0000000ULL, 0xFFFFFFFBULL, 0xFFFFF000ULL}, {0x0ULL, 0x4ULL, 0x0ULL}, 0x80000000ULL, 0x0ULL},
+  {64u, {0xC000000000000000ULL, 0xFFFFFFFFFFFFFFFEULL, 0xFFFFFFFF00000000ULL}, {0x0ULL, 0x1ULL, 0x0ULL}, 0x8000000000000000ULL, 0x0ULL},
+  {64u, {0xC000000000000000ULL, 0xFFFFFFFF00000000ULL, 0xFFFFFFFFFFFFFFFEULL}, {0x0ULL, 0x0ULL, 0x0ULL}, 0x8000000000000000ULL, 0x0ULL},
+  {64u, {0xFFFFFFFF00000000ULL, 0xFFFFFFF800000007ULL, 0xFFFFFFFF00000000ULL}, {0x0ULL, 0x0ULL, 0x0ULL}, 0xFFFFFFF000000000ULL, 0x0ULL},
+};
+} // namespace
+
+std::array<APInt, 2> solution(unsigned bw, std::array<APInt, 2> ssa_0, std::array<APInt, 2> ssa_1, std::array<APInt, 2> ssa_2) {
+  unsigned opbw = ssa_0[0].getBitWidth();
+  if (ssa_0[0].getBitWidth() > 64 || ssa_1[0].getBitWidth() > 64 || ssa_2[0].getBitWidth() > 64) return std::array<APInt, 2>{APInt(bw, 0), APInt(bw, 0)};
+  uint64_t inZ[3], inO[3];
+  inZ[0] = ssa_0[0].getZExtValue();
+  inO[0] = ssa_0[1].getZExtValue();
+  inZ[1] = ssa_1[0].getZExtValue();
+  inO[1] = ssa_1[1].getZExtValue();
+  inZ[2] = ssa_2[0].getZExtValue();
+  inO[2] = ssa_2[1].getZExtValue();
+  uint64_t outZ = 0, outO = 0;
+  for (const Entry &E : kEntries) {
+    if (E.bw != opbw) continue;
+    bool match = true;
+    for (unsigned a = 0; a < 3; ++a)
+      if ((E.argZ[a] & ~inZ[a]) | (E.argO[a] & ~inO[a])) { match = false; break; }
+    if (match) outZ |= E.outZ, outO |= E.outO;
+  }
+  return std::array<APInt, 2>{APInt(bw, outZ), APInt(bw, outO)};
+}
+}
