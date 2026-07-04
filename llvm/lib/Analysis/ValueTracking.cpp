@@ -86,6 +86,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <tuple>
@@ -1863,8 +1864,16 @@ ALWAYS_ENABLED_STATISTIC(
     PatternSCRPrecisionBitsAddedTopLevel,
     "Net top-level signed CR precision bits added by patterns");
 ALWAYS_ENABLED_STATISTIC(
+    PatternSCRPrecisionTenMillionthBitsAddedTopLevel,
+    "Net top-level signed CR precision bits added by patterns, in "
+    "ten-millionths of a bit");
+ALWAYS_ENABLED_STATISTIC(
     PatternUCRPrecisionBitsAddedTopLevel,
     "Net top-level unsigned CR precision bits added by patterns");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRPrecisionTenMillionthBitsAddedTopLevel,
+    "Net top-level unsigned CR precision bits added by patterns, in "
+    "ten-millionths of a bit");
 ALWAYS_ENABLED_STATISTIC(
     PatternSCRRelativeReducedTopLevel,
     "Net top-level signed relative set-size reduction from CR patterns, in "
@@ -1884,9 +1893,17 @@ ALWAYS_ENABLED_STATISTIC(
     "Total top-level signed CR precision bits with patterns disabled, excluding "
     "direct constant queries");
 ALWAYS_ENABLED_STATISTIC(
+    PatternSCRVanillaPrecisionTenMillionthBitsTopLevelNonConstant,
+    "Total top-level signed CR precision bits with patterns disabled, excluding "
+    "direct constant queries, in ten-millionths of a bit");
+ALWAYS_ENABLED_STATISTIC(
     PatternUCRVanillaPrecisionBitsTopLevelNonConstant,
     "Total top-level unsigned CR precision bits with patterns disabled, "
     "excluding direct constant queries");
+ALWAYS_ENABLED_STATISTIC(
+    PatternUCRVanillaPrecisionTenMillionthBitsTopLevelNonConstant,
+    "Total top-level unsigned CR precision bits with patterns disabled, "
+    "excluding direct constant queries, in ten-millionths of a bit");
 ALWAYS_ENABLED_STATISTIC(
     PatternSCRFinalPrecisionBitsTopLevel,
     "Total top-level signed CR precision bits with patterns enabled");
@@ -10954,6 +10971,41 @@ static unsigned getConstantRangePrecisionBits(const ConstantRange &CR) {
   return BitWidth > Log2SetSize ? BitWidth - Log2SetSize : 0;
 }
 
+static double getConstantRangeLog2SetSizeDouble(const ConstantRange &CR) {
+  if (CR.isEmptySet())
+    return 0.0;
+
+  APInt Size = getConstantRangeSetSize(CR);
+  unsigned ActiveBits = Size.getActiveBits();
+  assert(ActiveBits != 0 && "Non-empty set must have non-zero size");
+
+  constexpr unsigned MantissaBits = 53;
+  if (ActiveBits <= MantissaBits)
+    return std::log2(Size.roundToDouble());
+
+  uint64_t TopBits =
+      Size.extractBits(MantissaBits, ActiveBits - MantissaBits).getZExtValue();
+  double Mantissa =
+      static_cast<double>(TopBits) / static_cast<double>(1ULL << 52);
+  return static_cast<double>(ActiveBits - 1) + std::log2(Mantissa);
+}
+
+static double getConstantRangePrecisionBitsDouble(const ConstantRange &CR) {
+  double PrecisionBits = static_cast<double>(CR.getBitWidth()) -
+                         getConstantRangeLog2SetSizeDouble(CR);
+  return PrecisionBits > 0.0 ? PrecisionBits : 0.0;
+}
+
+static constexpr double CRPrecisionTenMillionthBitScale = 10000000.0;
+
+static uint64_t getCRPrecisionTenMillionthBits(double PrecisionBits) {
+  return PrecisionBits > 0.0
+             ? static_cast<uint64_t>(
+                   std::round(PrecisionBits *
+                              CRPrecisionTenMillionthBitScale))
+             : 0;
+}
+
 static uint64_t getCRRelativeReductionPerThousand(const APInt &Reduction,
                                                   unsigned BitWidth) {
   if (Reduction.isZero())
@@ -10981,6 +11033,15 @@ static void recordConstantRangeReduction(const ConstantRange &Before,
                         : APInt(BeforeSize.getBitWidth(), 0);
   RelativeReduced =
       getCRRelativeReductionPerThousand(Reduction, Before.getBitWidth());
+}
+
+static uint64_t getCRPrecisionTenMillionthBitsAdded(
+    const ConstantRange &Before, const ConstantRange &After) {
+  double BeforeLog2Size = getConstantRangeLog2SetSizeDouble(Before);
+  double AfterLog2Size = getConstantRangeLog2SetSizeDouble(After);
+  return getCRPrecisionTenMillionthBits(BeforeLog2Size > AfterLog2Size
+                                            ? BeforeLog2Size - AfterLog2Size
+                                            : 0.0);
 }
 
 static ConstantRange
@@ -11022,29 +11083,44 @@ computeConstantRangeImpl(const Value *V, bool ForSigned, bool UseInstrInfo,
     uint64_t RelativeReduced = 0;
     unsigned PatternFreePrecisionBits =
         getConstantRangePrecisionBits(PatternFreeCR);
+    uint64_t PatternFreePrecisionTenMillionthBits =
+        getCRPrecisionTenMillionthBits(
+            getConstantRangePrecisionBitsDouble(PatternFreeCR));
     recordConstantRangeReduction(PatternFreeCR, WithPatterns,
                                  PrecisionBitsAdded, RelativeReduced);
+    uint64_t PrecisionTenMillionthBitsAdded =
+        getCRPrecisionTenMillionthBitsAdded(PatternFreeCR, WithPatterns);
     if (ForSigned) {
       if (WithPatterns != PatternFreeCR)
         ++NumPatternSCRImprovedQueriesTopLevel;
       PatternSCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
-      if (!isa<Constant>(V))
+      if (!isa<Constant>(V)) {
         PatternSCRVanillaPrecisionBitsTopLevelNonConstant +=
             PatternFreePrecisionBits;
+        PatternSCRVanillaPrecisionTenMillionthBitsTopLevelNonConstant +=
+            PatternFreePrecisionTenMillionthBits;
+      }
       PatternSCRFinalPrecisionBitsTopLevel +=
           getConstantRangePrecisionBits(WithPatterns);
       PatternSCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
+      PatternSCRPrecisionTenMillionthBitsAddedTopLevel +=
+          PrecisionTenMillionthBitsAdded;
       PatternSCRRelativeReducedTopLevel += RelativeReduced;
     } else {
       if (WithPatterns != PatternFreeCR)
         ++NumPatternUCRImprovedQueriesTopLevel;
       PatternUCRVanillaPrecisionBitsTopLevel += PatternFreePrecisionBits;
-      if (!isa<Constant>(V))
+      if (!isa<Constant>(V)) {
         PatternUCRVanillaPrecisionBitsTopLevelNonConstant +=
             PatternFreePrecisionBits;
+        PatternUCRVanillaPrecisionTenMillionthBitsTopLevelNonConstant +=
+            PatternFreePrecisionTenMillionthBits;
+      }
       PatternUCRFinalPrecisionBitsTopLevel +=
           getConstantRangePrecisionBits(WithPatterns);
       PatternUCRPrecisionBitsAddedTopLevel += PrecisionBitsAdded;
+      PatternUCRPrecisionTenMillionthBitsAddedTopLevel +=
+          PrecisionTenMillionthBitsAdded;
       PatternUCRRelativeReducedTopLevel += RelativeReduced;
     }
     return PatternFreeCR;
